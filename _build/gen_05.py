@@ -3,16 +3,16 @@ from gen_common import md, code, save, CONFIG_CELL, KAGGLE_CELL
 cells = []
 
 cells.append(md("""\
-# 🌾 Atelier IA Agricole — 05. LLM : faire tenir un grand modèle dans Google Colab
+# 🌾 Atelier IA Agricole — 05. LLM: faire tenir un grand modèle dans Google Colab
 
 Un **LLM** (*Large Language Model*) est un modèle de langage **massif** (ici, un modèle
-d'environ **9 milliards de paramètres**) : bien plus savant qu'un SLM (notebook 01), mais
+d'environ **9 milliards de paramètres**): bien plus savant qu'un SLM (notebook 01), mais
 aussi bien plus **lourd**.
 
-**Le problème :** stocker 9 milliards de paramètres en pleine précision (fp32) demande
+**Le problème:** stocker 9 milliards de paramètres en pleine précision (fp32) demande
 **~35 Go de mémoire** — impossible sur le GPU gratuit de Google Colab (T4, 16 Go de VRAM).
 
-Deux solutions, présentées dans ce notebook :
+Deux solutions, présentées dans ce notebook:
 1. **La quantification** — réduire la précision numérique des paramètres (fp32 → int4) pour
    faire tenir le LLM **localement** sur le GPU Colab.
 2. **Le cloud (Groq)** — envoyer la question à un LLM **hébergé**, sans aucun calcul local.
@@ -24,20 +24,20 @@ cells.append(code('''\
 pip_install("transformers>=4.56", "accelerate", "bitsandbytes")
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, pipeline
-print("✅ Bibliothèques prêtes. GPU disponible :", torch.cuda.is_available())
+print("✅ Bibliothèques prêtes. GPU disponible:", torch.cuda.is_available())
 '''))
 
 cells.append(md("""\
-## 1. Combien de mémoire prend un LLM de ~9 Md paramètres ?
+## 1. Combien de mémoire prend un LLM de ~9 Md paramètres?
 
-Chaque paramètre est normalement stocké sur 4 octets (fp32). La quantification réduit ce coût :
+Chaque paramètre est normalement stocké sur 4 octets (fp32). La quantification réduit ce coût:
 """))
 
 cells.append(code('''\
 N_PARAMS_LLM = 8_829_407_232  # 01-ai/Yi-1.5-9B-Chat (~8,8 Md paramètres)
 VRAM_COLAB_GRATUIT_GO = 16    # GPU T4, offert gratuitement par Colab
 
-print(f"{'Précision':<14}{'Taille':>10}{'Tient sur Colab ?':>22}")
+print(f"{'Précision':<14}{'Taille':>10}{'Tient sur Colab?':>22}")
 for nom, octets_par_param in [("fp32", 4), ("fp16 / bf16", 2), ("int8", 1), ("int4 (NF4)", 0.5)]:
     go = N_PARAMS_LLM * octets_par_param / 1e9
     tient = "✅ oui" if go < VRAM_COLAB_GRATUIT_GO else "❌ non"
@@ -45,7 +45,7 @@ for nom, octets_par_param in [("fp32", 4), ("fp16 / bf16", 2), ("int8", 1), ("in
 '''))
 
 cells.append(md("""\
-**Conclusion :** sans quantification (fp32/fp16), ce LLM ne tient **pas** sur un GPU Colab
+**Conclusion:** sans quantification (fp32/fp16), ce LLM ne tient **pas** sur un GPU Colab
 gratuit. En **int8** ou **int4**, il tient très confortablement. On utilise la bibliothèque
 **bitsandbytes** (gratuite, intégrée à Hugging Face) pour quantifier le modèle **au chargement**.
 """))
@@ -53,14 +53,14 @@ gratuit. En **int8** ou **int4**, il tient très confortablement. On utilise la 
 cells.append(md("""\
 ## 2. Charger le LLM en 4 bits
 
-- En **mode démo** : un petit modèle (`Qwen2.5-0.5B-Instruct`) pour tester rapidement le code.
-- En **mode complet, avec un GPU** : le vrai LLM `01-ai/Yi-1.5-9B-Chat` (~8,8 Md paramètres),
+- En **mode démo**: un petit modèle (`Qwen2.5-0.5B-Instruct`) pour tester rapidement le code.
+- En **mode complet, avec un GPU**: le vrai LLM `01-ai/Yi-1.5-9B-Chat` (~8,8 Md paramètres),
   quantifié en **4 bits (NF4)** grâce à `BitsAndBytesConfig`.
 
-> ⚠️ Le LLM de ~9 Md **a besoin d'un GPU** : la quantification `bitsandbytes` utilise des noyaux
+> ⚠️ Le LLM de ~9 Md **a besoin d'un GPU**: la quantification `bitsandbytes` utilise des noyaux
 > CUDA, et le modèle non quantifié (~18 Go) ne tiendrait pas dans la RAM CPU de Colab (~13 Go).
 > **Sans GPU activé**, ce notebook bascule donc automatiquement sur le petit modèle pour rester
-> exécutable. Pour le vrai LLM : `Exécution` → `Modifier le type d'exécution` → **GPU (T4)**.
+> exécutable. Pour le vrai LLM: `Exécution` → `Modifier le type d'exécution` → **GPU (T4)**.
 
 `device_map="auto"` place automatiquement le modèle sur le GPU s'il est disponible, sinon sur
 le CPU.
@@ -69,11 +69,11 @@ le CPU.
 cells.append(code('''\
 GPU_DISPO = torch.cuda.is_available()
 
-# bitsandbytes quantifie les poids avec des noyaux CUDA : un GPU est donc indispensable pour
+# bitsandbytes quantifie les poids avec des noyaux CUDA: un GPU est donc indispensable pour
 # quantifier. De plus, un LLM de ~9 Md en précision normale (~18 Go) ne tient PAS dans la RAM
-# CPU d'un Colab gratuit (~13 Go) : le charger sans GPU planterait la session (OOM). Donc,
+# CPU d'un Colab gratuit (~13 Go): le charger sans GPU planterait la session (OOM). Donc,
 # sans GPU, on bascule sur un petit modèle pour que le notebook reste exécutable partout.
-# 👉 Sur Colab : Exécution → Modifier le type d'exécution → GPU (T4) pour le vrai LLM 9 Md quantifié.
+# 👉 Sur Colab: Exécution → Modifier le type d'exécution → GPU (T4) pour le vrai LLM 9 Md quantifié.
 MODELE_LLM = ("Qwen/Qwen2.5-0.5B-Instruct"
               if (MODE_DEMO or not GPU_DISPO) else "01-ai/Yi-1.5-9B-Chat")
 
@@ -97,17 +97,17 @@ pipe_llm = pipeline("text-generation", model=modele, tokenizer=tokenizer)
 
 empreinte_go = modele.get_memory_footprint() / 1e9
 if GPU_DISPO:
-    print(f"✅ {MODELE_LLM} chargé en 4 bits — empreinte mémoire réelle : {empreinte_go:.2f} Go")
+    print(f"✅ {MODELE_LLM} chargé en 4 bits — empreinte mémoire réelle: {empreinte_go:.2f} Go")
 else:
-    print(f"ℹ️ Pas de GPU CUDA : petit modèle {MODELE_LLM} chargé en précision normale (CPU).")
-    print(f"   Empreinte mémoire réelle : {empreinte_go:.2f} Go")
+    print(f"ℹ️ Pas de GPU CUDA: petit modèle {MODELE_LLM} chargé en précision normale (CPU).")
+    print(f"   Empreinte mémoire réelle: {empreinte_go:.2f} Go")
     print("   👉 Activez un GPU T4 sur Colab pour charger le vrai LLM 9 Md quantifié en 4 bits.")
 '''))
 
 cells.append(md("""\
 ## 3. Interroger le LLM quantifié
 
-Même si les poids sont compressés, on utilise le modèle **normalement** : la quantification
+Même si les poids sont compressés, on utilise le modèle **normalement**: la quantification
 est invisible pour l'utilisateur, seule la mémoire (et un peu la vitesse) change.
 `temperature` et `max_new_tokens` fonctionnent comme dans les notebooks précédents.
 """))
@@ -182,10 +182,10 @@ N_EXEMPLES = 3 if MODE_DEMO else 10
 echantillon = df.sample(n=N_EXEMPLES, random_state=42)
 
 for _, ligne in echantillon.iterrows():
-    prompt = (f"Mesures de sol : {ligne_en_texte(ligne)}. Quelle culture recommandes-tu, "
-              "et pourquoi (une phrase) ? La vraie culture attendue est en anglais.")
+    prompt = (f"Mesures de sol: {ligne_en_texte(ligne)}. Quelle culture recommandes-tu, "
+              "et pourquoi (une phrase)? La vraie culture attendue est en anglais.")
     reponse = chat_llm(prompt, max_new_tokens=60)
-    print(f"--- Vrai : {ligne['label']} ---\\n{reponse}\\n")
+    print(f"--- Vrai: {ligne['label']} ---\\n{reponse}\\n")
 '''))
 
 cells.append(md("""\
@@ -206,7 +206,7 @@ GROQ_API_KEY = ""  # 👉 Collez votre clé ici (gratuite sur console.groq.com)
 MODELE_GROQ = "llama-3.3-70b-versatile"  # ~70 Md paramètres, hébergé par Groq
 
 if not GROQ_API_KEY:
-    print("ℹ️ Pas de clé Groq : cette section sera ignorée.")
+    print("ℹ️ Pas de clé Groq: cette section sera ignorée.")
     print("   Créez une clé gratuite sur https://console.groq.com/keys et collez-la ci-dessus.")
 else:
     pip_install("groq")
@@ -232,15 +232,15 @@ de culture), mais via Groq — sans aucun modèle chargé localement.
 cells.append(code('''\
 if GROQ_API_KEY:
     for _, ligne in echantillon.head(3).iterrows():
-        prompt = (f"Mesures de sol : {ligne_en_texte(ligne)}. Quelle culture recommandes-tu, "
-                  "et pourquoi (une phrase) ?")
-        print(f"--- Vrai : {ligne['label']} ---\\n{chat_groq(prompt)}\\n")
+        prompt = (f"Mesures de sol: {ligne_en_texte(ligne)}. Quelle culture recommandes-tu, "
+                  "et pourquoi (une phrase)?")
+        print(f"--- Vrai: {ligne['label']} ---\\n{chat_groq(prompt)}\\n")
 else:
     print("ℹ️ Section ignorée (pas de clé Groq).")
 '''))
 
 cells.append(md("""\
-## 6. int8 vs int4 : quel compromis choisir ?
+## 6. int8 vs int4: quel compromis choisir?
 
 | Précision | Mémoire (~9 Md params) | Qualité | Quand l'utiliser |
 |-----------|------------------------|---------|-------------------|
@@ -248,12 +248,12 @@ cells.append(md("""\
 | int8      | ~8,8 Go                | Très proche du fp16 | Bon compromis si la VRAM le permet |
 | int4 (NF4)| ~4,4 Go                | Légère perte, souvent imperceptible | GPU limité (Colab gratuit) |
 
-| Approche | Calcul local ? | Limite principale |
+| Approche | Calcul local? | Limite principale |
 |----------|-----------------|--------------------|
 | Quantification (int4) | Oui (GPU Colab) | Taille max du modèle ≈ VRAM disponible |
 | API cloud (Groq) | Non | Nécessite une connexion + une clé API |
 
-> 💡 En pratique : quantifier en **int4** pour rester autonome sur Colab, ou utiliser **Groq**
+> 💡 En pratique: quantifier en **int4** pour rester autonome sur Colab, ou utiliser **Groq**
 > pour des modèles encore plus gros, sans se soucier du matériel.
 """))
 
@@ -288,10 +288,10 @@ gc.collect()
 
 config_8bit = BitsAndBytesConfig(load_in_8bit=True)
 modele_8bit = charger_llm(config_8bit)
-print(f"4 bits  : {empreinte_go:.2f} Go")
-print(f"8 bits  : {modele_8bit.get_memory_footprint() / 1e9:.2f} Go")
+print(f"4 bits: {empreinte_go:.2f} Go")
+print(f"8 bits: {modele_8bit.get_memory_footprint() / 1e9:.2f} Go")
 if not GPU_DISPO:
-    print("(Sans GPU, les deux valeurs sont identiques : la quantification n'a pas été appliquée.)")
+    print("(Sans GPU, les deux valeurs sont identiques: la quantification n'a pas été appliquée.)")
 
 del modele_8bit
 gc.collect()
@@ -302,7 +302,7 @@ cells.append(md("""\
 
 Redemandez `chat_llm(...)` d'inventer un slogan pour une coopérative agricole avec
 `temperature=0.0` puis `temperature=1.0`. Le grand modèle réagit-il différemment du
-SLM (notebook 01) au même réglage ?
+SLM (notebook 01) au même réglage?
 """))
 
 cells.append(code('''\
@@ -341,7 +341,7 @@ cells.append(md("""\
 cells.append(code('''\
 n_params_13b = 13_000_000_000
 go_fp16 = n_params_13b * 2 / 1e9
-print(f"13 Md paramètres en fp16 → {go_fp16:.1f} Go (> 16 Go : ne tient pas sur un T4 gratuit)")
+print(f"13 Md paramètres en fp16 → {go_fp16:.1f} Go (> 16 Go: ne tient pas sur un T4 gratuit)")
 '''))
 
 cells.append(md("""\

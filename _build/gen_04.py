@@ -3,17 +3,17 @@ from gen_common import md, code, save, CONFIG_CELL, KAGGLE_CELL, IMAGES_CELL
 cells = []
 
 cells.append(md("""\
-# 🌾 Atelier IA Agricole — 04. OV : détection ouverte, segmentation et tracking
+# 🌾 Atelier IA Agricole — 04. OV: détection ouverte, segmentation et tracking
 
 **OV** (*Open Vocabulary*) désigne des modèles de détection qui cherchent un objet à partir
 d'un **mot** plutôt que d'une liste figée de catégories. Ce notebook montre trois briques
-visuelles utiles au champ :
-- **bounding box** : repérer un objet avec un mot-clé (« a leaf », « fruit »…) ;
-- **segmentation** : isoler l'objet dans l'image ;
-- **tracking** : suivre cet objet sur une petite séquence d'images.
+visuelles utiles au champ:
+- **bounding box**: repérer un objet avec un mot-clé (« a leaf », « fruit »…) ;
+- **segmentation**: isoler l'objet dans l'image ;
+- **tracking**: suivre cet objet sur une petite séquence d'images.
 
 Le modèle utilisé (**OWL-ViT base**, ~150M paramètres) est volontairement **petit et rapide**,
-pour tourner confortablement sur le CPU gratuit de Google Colab. Le code reste minimal : le but
+pour tourner confortablement sur le CPU gratuit de Google Colab. Le code reste minimal: le but
 est d'apprendre à **utiliser** le modèle et à observer l'effet du **prompt** (le mot-clé donné
 au détecteur), pas d'écrire beaucoup de code.
 """))
@@ -42,7 +42,7 @@ cells.append(code('''\
 N_EXEMPLES = 3 if MODE_DEMO else 10
 echantillon = echantillon_images_plantes(N_EXEMPLES)
 image, vrai_label = echantillon[0]
-print(f"{len(echantillon)} images chargées. Photo de démonstration : {vrai_label}")
+print(f"{len(echantillon)} images chargées. Photo de démonstration: {vrai_label}")
 image.thumbnail((480, 480))
 image
 '''))
@@ -53,7 +53,7 @@ cells.append(md("""\
 On donne un mot, et le modèle cherche dans l'image l'objet correspondant — sans avoir été
 entraîné spécifiquement sur ce mot. On garde toujours la **meilleure** boîte trouvée, même si
 sa confiance est faible (utile sur une photo dense, où « leaf » désigne une zone plutôt qu'un
-objet unique) : on affiche alors un avertissement plutôt que de planter.
+objet unique): on affiche alors un avertissement plutôt que de planter.
 """))
 
 cells.append(code('''\
@@ -104,7 +104,7 @@ def segmenter(image, detection):
     fgd = np.zeros((1, 65), np.float64)
     box = detection["box"]
     h, w = arr.shape[:2]
-    # Rogner la boîte dans l'image en gardant une marge de fond : grabCut plante
+    # Rogner la boîte dans l'image en gardant une marge de fond: grabCut plante
     # (cv2.error) si le rectangle couvre tout le cadre (aucun pixel de fond) — ce qui
     # arrive avec une feuille qui remplit l'image. On garde donc >= 1 px de marge.
     x0 = max(1, int(box["xmin"]))
@@ -166,7 +166,7 @@ tracker.init(cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR), init_box)
 
 for i, frame in enumerate(frames, start=1):
     ok, boite = tracker.update(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-    print(f"Image {i} : suivi {ok} | boîte = {tuple(round(v, 1) for v in boite)}")
+    print(f"Image {i}: suivi {ok} | boîte = {tuple(round(v, 1) for v in boite)}")
 '''))
 
 cells.append(md("""\
@@ -178,9 +178,9 @@ la confiance obtenue selon la catégorie réelle de la photo.
 
 cells.append(code('''\
 for img, label in echantillon:
-    resultat = detecter(img, "a leaf", seuil_alerte=1.0)  # seuil à 1.0 : pas d'avertissement répété
+    resultat = detecter(img, "a leaf", seuil_alerte=1.0)  # seuil à 1.0: pas d'avertissement répété
     score = resultat["score"] if resultat else 0.0
-    print(f"Vrai : {label:10s} | confiance détection 'a leaf' = {score:.2f}")
+    print(f"Vrai: {label:10s} | confiance détection 'a leaf' = {score:.2f}")
 '''))
 
 cells.append(md("""\
@@ -195,7 +195,7 @@ cells.append(md("""\
 ### 🏋️ Exercice 1 — Le prompt engineering change la confiance
 
 Comparez la confiance obtenue pour `"leaf"`, `"a leaf"` et `"a green plant leaf"` sur la même
-image. La formulation du mot-clé change-t-elle vraiment le résultat ?
+image. La formulation du mot-clé change-t-elle vraiment le résultat?
 """))
 
 cells.append(code('''\
@@ -244,7 +244,7 @@ cells.append(md("""\
   d'image en image.
 - Un modèle **petit (~150M paramètres)** suffit pour ce trio, et reste rapide sur Colab.
 
-**➡️ Notebook suivant : `05_LLM_quantization.ipynb`** — faire tourner un grand modèle de
+**➡️ Notebook suivant: `05_LLM_quantization.ipynb`** — faire tourner un grand modèle de
 langage (~9 Md paramètres) grâce à la quantification, en local ou via une API cloud (Groq).
 """))
 

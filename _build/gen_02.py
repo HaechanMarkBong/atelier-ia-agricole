@@ -3,13 +3,13 @@ from gen_common import md, code, save, CONFIG_CELL, KAGGLE_CELL, IMAGES_CELL
 cells = []
 
 cells.append(md("""\
-# 🌾 Atelier IA Agricole — 02. VLM : comprendre des images de plantes
+# 🌾 Atelier IA Agricole — 02. VLM: comprendre des images de plantes
 
 Un **VLM** (*Vision-Language Model*) comprend à la fois les **images** et le **texte**.
 On peut lui montrer une **photo de feuille** et lui demander de la **décrire** ou de
 répondre à une **question** à son sujet.
 
-Ce notebook n'est pas un cours de programmation : le code reste minimal. L'objectif est
+Ce notebook n'est pas un cours de programmation: le code reste minimal. L'objectif est
 d'apprendre à **utiliser** un modèle de fondation vision-langage sur un vrai jeu de données,
 et d'observer l'effet de réglages comme la **longueur de réponse** et le **prompt engineering**
 (la façon de poser la question).
@@ -32,10 +32,10 @@ cells.append(code(IMAGES_CELL))
 cells.append(md("""\
 ## 1. Charger le VLM
 
-- En **mode démo** : `SmolVLM-256M-Instruct` (250M paramètres, rapide à tester).
-- En **mode complet** : `SmolVLM-500M-Instruct` (500M paramètres, plus précis).
+- En **mode démo**: `SmolVLM-256M-Instruct` (250M paramètres, rapide à tester).
+- En **mode complet**: `SmolVLM-500M-Instruct` (500M paramètres, plus précis).
 
-On désactive le **découpage en tuiles** de l'image (`do_image_splitting`) : cela suffit pour
+On désactive le **découpage en tuiles** de l'image (`do_image_splitting`): cela suffit pour
 décrire une photo simple, et ça reste **rapide** même sans GPU.
 """))
 
@@ -52,7 +52,7 @@ print(f"✅ {MODELE_VLM} chargé (~{n_params:.0f} M paramètres)")
 cells.append(md("""\
 ## 2. Décrire et interroger une image
 
-Une seule fonction suffit : on donne une **image** et une **question** (texte), le modèle
+Une seule fonction suffit: on donne une **image** et une **question** (texte), le modèle
 répond. `max_new_tokens` limite la longueur de la réponse générée.
 """))
 
@@ -67,7 +67,7 @@ def demander_image(image, question="Describe the image in one short sentence.", 
 cells.append(md("""\
 ## 3. Un vrai jeu de données agricole (Kaggle)
 
-On utilise le jeu **Plant Disease Recognition** (Kaggle) : des photos de feuilles réparties
+On utilise le jeu **Plant Disease Recognition** (Kaggle): des photos de feuilles réparties
 en 3 catégories — `Healthy`, `Powdery`, `Rust`. On demande au VLM un **diagnostic rapide** sur
 plusieurs photos, et on compare à la vraie catégorie.
 """))
@@ -82,12 +82,12 @@ question_diagnostic = ("Look at this plant leaf. In one short sentence, say if i
 
 for image, vrai_label in echantillon:
     reponse = demander_image(image, question_diagnostic)
-    print(f"Vrai : {vrai_label:10s} | VLM : {reponse}")
+    print(f"Vrai: {vrai_label:10s} | VLM: {reponse}")
 '''))
 
 cells.append(md("""\
 > 🌍 **Remarque langue.** Ces petits modèles VLM « pensent » surtout en **anglais**.
-> Astuce : posez la question en anglais, puis **traduisez la réponse** avec un SLM/LLM
+> Astuce: posez la question en anglais, puis **traduisez la réponse** avec un SLM/LLM
 > (notebooks 01 et 05) !
 """))
 
@@ -103,7 +103,7 @@ cells.append(md("""\
 ### 🏋️ Exercice 1 — Effet de `max_new_tokens`
 
 Prenez la première image de `echantillon` et demandez une description avec
-`max_new_tokens=10`, puis `max_new_tokens=80`. Que se passe-t-il avec la réponse courte ?
+`max_new_tokens=10`, puis `max_new_tokens=80`. Que se passe-t-il avec la réponse courte?
 """))
 
 cells.append(code('''\
@@ -123,11 +123,11 @@ for taille in [10, 80]:
 '''))
 
 cells.append(md("""\
-### 🏋️ Exercice 2 — Prompt engineering : question vague vs question ciblée
+### 🏋️ Exercice 2 — Prompt engineering: question vague vs question ciblée
 
 Sur la même image, comparez une question **vague** (« What do you see? ») à une question
 **ciblée** (« Does this leaf show signs of rust disease, powdery mildew, or is it healthy?
-Answer with one word. »). Laquelle donne une réponse plus utile pour un diagnostic ?
+Answer with one word. »). Laquelle donne une réponse plus utile pour un diagnostic?
 """))
 
 cells.append(code('''\
@@ -152,13 +152,13 @@ print(demander_image(image_test, prompt_cible))
 cells.append(md("""\
 ## ✅ Récapitulatif
 
-- Un **VLM** relie **image** et **texte** : description ou question/réponse visuelle.
+- Un **VLM** relie **image** et **texte**: description ou question/réponse visuelle.
 - `max_new_tokens` contrôle la longueur ; une question **ciblée** (prompt engineering) donne
   une réponse plus exploitable qu'une question vague.
 - Très utile pour le **pré-diagnostic** à partir d'une photo — à confirmer toujours par un
   expert.
 
-**➡️ Notebook suivant : `03_TinyLLM_TinyVLM.ipynb`** — les modèles génératifs les plus petits.
+**➡️ Notebook suivant: `03_TinyLLM_TinyVLM.ipynb`** — les modèles génératifs les plus petits.
 """))
 
 save(cells, "../notebooks/02_VLM_vision.ipynb")

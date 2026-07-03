@@ -1,7 +1,7 @@
 # 🌾 Atelier IA Agricole — SLM · VLM · TinyLLM/TinyVLM · OV · LLM
 
 Une série de **notebooks Google Colab** (en français) pour découvrir des usages concrets de
-l'intelligence artificielle appliquée à l'**agriculture**. **100 % gratuit** : aucun service
+l'intelligence artificielle appliquée à l'**agriculture**. **100 % gratuit**: aucun service
 payant requis, tout passe par **Hugging Face**.
 
 ## 📚 Contenu
@@ -30,7 +30,7 @@ indépendante** (vous pouvez ouvrir n'importe lequel sans avoir exécuté les au
 
 ## ⚙️ Le « mode démo »
 
-Tout en haut de chaque notebook, une variable contrôle la taille des modèles :
+Tout en haut de chaque notebook, une variable contrôle la taille des modèles:
 
 ```python
 MODE_DEMO = os.environ.get("ATELIER_DEMO", "0") == "1"
@@ -41,7 +41,7 @@ MODE_DEMO = os.environ.get("ATELIER_DEMO", "0") == "1"
 - `MODE_DEMO = False` (défaut) → modèles **complets** de l'atelier (~1 Md pour SLM/VLM, ~9 Md
   pour le LLM).
 
-Pour forcer le mode démo lors d'un test automatique :
+Pour forcer le mode démo lors d'un test automatique:
 `os.environ["ATELIER_DEMO"] = "1"` **avant** la cellule de configuration.
 
 ## 🛠️ Outils utilisés (tous gratuits)
@@ -55,9 +55,9 @@ Pour forcer le mode démo lors d'un test automatique :
 
 ## ✅ Notes pédagogiques
 
-- Les sorties des modèles sont des **aides** : un diagnostic agronomique doit toujours être
+- Les sorties des modèles sont des **aides**: un diagnostic agronomique doit toujours être
   confirmé par un·e professionnel·le.
 - Les petits modèles répondent souvent mieux en **anglais** ; on peut traduire avec le SLM ou
   le LLM.
-- Le notebook 05 explique **pourquoi** la quantification est nécessaire : un LLM de ~9 Md
+- Le notebook 05 explique **pourquoi** la quantification est nécessaire: un LLM de ~9 Md
   paramètres pèse ~35 Go en fp32, alors qu'un GPU Colab gratuit (T4) n'offre que 16 Go de VRAM.

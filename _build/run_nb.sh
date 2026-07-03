@@ -18,7 +18,7 @@ BASE="$(basename "$NB")"
 cp "$NB" "$WORK/$BASE"
 
 echo ">>> Exécution: $BASE (timeout ${TO}s/cellule)"
-echo ">>> Résultat (avec sorties) conservé dans : $RESULTS/$BASE"
+echo ">>> Résultat (avec sorties) conservé dans: $RESULTS/$BASE"
 cd "$WORK"
 jupyter nbconvert --to notebook --execute --inplace \
   --ExecutePreprocessor.timeout="$TO" \

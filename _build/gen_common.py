@@ -31,7 +31,7 @@ CONFIG_CELL = '''\
 # === Configuration de l'environnement (exécuter en premier) ===
 import os, sys, subprocess
 
-# Sommes-nous dans Google Colab ?
+# Sommes-nous dans Google Colab?
 try:
     import google.colab  # noqa: F401
     IS_COLAB = True
@@ -46,12 +46,12 @@ MODE_DEMO = os.environ.get("ATELIER_DEMO", "0") == "1"
 def pip_install(*paquets):
     """Installe des paquets pip de façon silencieuse (Colab ou local)."""
     cmd = [sys.executable, "-m", "pip", "install", "-q", *paquets]
-    print("Installation :", " ".join(paquets), "...")
+    print("Installation:", " ".join(paquets), "...")
     subprocess.run(cmd, check=False)
 
 print(f"IS_COLAB = {IS_COLAB}")
 print(f"MODE_DEMO = {MODE_DEMO}")
-print("Python :", sys.version.split()[0])
+print("Python:", sys.version.split()[0])
 '''
 
 # Cellule partagée pour charger un jeu de données Kaggle public.
@@ -67,7 +67,7 @@ def telecharger_dataset_kaggle(reference):
     Renvoie None si Kaggle est injoignable (un échantillon de secours prend alors le relais)."""
     try:
         dossier = kagglehub.dataset_download(reference)
-        print(f"✅ Jeu de données Kaggle prêt : {reference}")
+        print(f"✅ Jeu de données Kaggle prêt: {reference}")
         return dossier
     except Exception as e:
         print(f"⚠️ Kaggle indisponible ({e}) → utilisation d'un échantillon de secours.")
@@ -89,7 +89,7 @@ URLS_SECOURS = [
 ]
 
 def echantillon_images_plantes(n=10):
-    """Renvoie une liste de (image PIL, label) : n photos du jeu Kaggle Healthy/Powdery/Rust ;
+    """Renvoie une liste de (image PIL, label): n photos du jeu Kaggle Healthy/Powdery/Rust ;
     à défaut, quelques URLs publiques ; et en dernier recours une image synthétique hors-ligne.
     Ainsi la liste renvoyée n'est jamais vide, même sans réseau."""
     dossier = telecharger_dataset_kaggle(REFERENCE_IMAGES_KAGGLE)
@@ -119,9 +119,9 @@ def echantillon_images_plantes(n=10):
             with urllib.request.urlopen(req, timeout=20) as r:
                 images.append((Image.open(io.BytesIO(r.read())).convert("RGB"), "inconnu"))
         except Exception as e:
-            print("⚠️ Image ignorée :", e)
+            print("⚠️ Image ignorée:", e)
 
-    # Dernier recours 100% hors-ligne : si Kaggle ET les URLs échouent, on fabrique au moins
+    # Dernier recours 100% hors-ligne: si Kaggle ET les URLs échouent, on fabrique au moins
     # une image synthétique pour que le notebook aille jusqu'au bout (pas d'IndexError sur
     # echantillon[0], liste jamais vide).
     if not images:

@@ -3,19 +3,19 @@ from gen_common import md, code, save, CONFIG_CELL, KAGGLE_CELL
 cells = []
 
 cells.append(md("""\
-# 🌾 Atelier IA Agricole — 01. SLM : les petits modèles de langage
+# 🌾 Atelier IA Agricole — 01. SLM: les petits modèles de langage
 
 Un **SLM** (*Small Language Model*) est un modèle de langage **compact** (autour du **milliard
 de paramètres**, au lieu de dizaines de milliards pour un LLM).
 
-**Pourquoi est-ce crucial en agriculture ?**
+**Pourquoi est-ce crucial en agriculture?**
 - 📶 Fonctionne **hors-ligne** (utile au champ, sans Internet).
 - 📱 Tourne sur du **matériel modeste** (téléphone, mini-PC, Raspberry Pi).
 - ⚡ **Rapide** et **peu gourmand** en énergie.
 - 🔒 Données qui **restent locales** (confidentialité).
 
-Le compromis : un SLM est **moins savant** qu'un gros LLM (notebook 05). Ce notebook n'est pas
-un cours de programmation : le code est volontairement court, pour se concentrer sur **comment
+Le compromis: un SLM est **moins savant** qu'un gros LLM (notebook 05). Ce notebook n'est pas
+un cours de programmation: le code est volontairement court, pour se concentrer sur **comment
 utiliser** un modèle de fondation et sur l'effet de réglages comme la **température**, la
 **taille de réponse** et le **prompt engineering** (dont l'apprentissage *few-shot*).
 """))
@@ -32,7 +32,7 @@ print("✅ Bibliothèques prêtes.")
 cells.append(md("""\
 ## 1. Choisir des SLM à comparer
 
-Deux modèles **ouverts** (aucune clé API requise), du plus petit au plus proche du milliard :
+Deux modèles **ouverts** (aucune clé API requise), du plus petit au plus proche du milliard:
 
 | Modèle (Hugging Face) | Paramètres |
 |------------------------|-----------|
@@ -49,7 +49,7 @@ if MODE_DEMO:
 else:
     MODELES_SLM = ["Qwen/Qwen2.5-0.5B-Instruct", "TinyLlama/TinyLlama-1.1B-Chat-v1.0"]
 
-print("Modèles à comparer :", MODELES_SLM)
+print("Modèles à comparer:", MODELES_SLM)
 '''))
 
 cells.append(md("""\
@@ -74,9 +74,9 @@ def obtenir_pipeline(nom_modele):
 
 def chat(nom_modele, prompt, systeme=None, temperature=0.0, max_new_tokens=120):
     """Interroge le SLM.
-    - `systeme`        : consigne de rôle (prompt engineering)
-    - `temperature`    : créativité (0 = déterministe, 1 = très varié)
-    - `max_new_tokens` : taille maximale de la réponse générée
+    - `systeme`: consigne de rôle (prompt engineering)
+    - `temperature`: créativité (0 = déterministe, 1 = très varié)
+    - `max_new_tokens`: taille maximale de la réponse générée
     """
     pipe = obtenir_pipeline(nom_modele)
     messages = ([{"role": "system", "content": systeme}] if systeme else []) + \\
@@ -90,7 +90,7 @@ def chat(nom_modele, prompt, systeme=None, temperature=0.0, max_new_tokens=120):
     return sortie[0]["generated_text"][-1]["content"].strip()
 
 # Premier test
-print(chat(MODELES_SLM[0], "En une phrase, qu'est-ce que la rotation des cultures ?"))
+print(chat(MODELES_SLM[0], "En une phrase, qu'est-ce que la rotation des cultures?"))
 '''))
 
 cells.append(md("""\
@@ -114,7 +114,7 @@ for m in MODELES_SLM:
 cells.append(md("""\
 ## 4. Un vrai jeu de données agricole (Kaggle)
 
-On utilise le jeu **Crop Recommendation Dataset** (Kaggle) : 2200 mesures de sol/climat
+On utilise le jeu **Crop Recommendation Dataset** (Kaggle): 2200 mesures de sol/climat
 (azote N, phosphore P, potassium K, température, humidité, pH, pluviométrie) avec la
 **culture recommandée** par des agronomes. `kagglehub` télécharge les jeux **publics** sans
 clé API ; si Kaggle est injoignable, un petit échantillon de secours prend le relais.
@@ -165,7 +165,7 @@ df.head(3)
 '''))
 
 cells.append(md("""\
-## 5. Zero-shot : demander une recommandation sans exemple
+## 5. Zero-shot: demander une recommandation sans exemple
 
 On transforme chaque ligne en phrase, puis on demande au SLM de **deviner** la culture —
 sans lui montrer aucun exemple au préalable (« zero-shot »).
@@ -177,28 +177,28 @@ def ligne_en_texte(ligne):
             f"température={ligne['temperature']:.1f}°C, humidité={ligne['humidity']:.0f}%, "
             f"pH={ligne['ph']:.1f}, pluie={ligne['rainfall']:.0f}mm")
 
-# Donner la liste FERMÉE des cultures possibles aide beaucoup un petit modèle : sans elle,
+# Donner la liste FERMÉE des cultures possibles aide beaucoup un petit modèle: sans elle,
 # il invente souvent des mots hors sujet plutôt que de choisir une vraie culture du jeu.
 LISTE_CULTURES = sorted(df["label"].unique())
 CULTURES_TXT = ", ".join(LISTE_CULTURES)
 
 def prompt_zero_shot(ligne):
-    return (f"Voici des mesures de sol et de climat : {ligne_en_texte(ligne)}.\\n"
-            f"Quelle culture recommandes-tu, en choisissant UNIQUEMENT dans cette liste : "
-            f"{CULTURES_TXT} ?\\nRéponds uniquement par le nom de la culture.")
+    return (f"Voici des mesures de sol et de climat: {ligne_en_texte(ligne)}.\\n"
+            f"Quelle culture recommandes-tu, en choisissant UNIQUEMENT dans cette liste: "
+            f"{CULTURES_TXT}?\\nRéponds uniquement par le nom de la culture.")
 
 N_EXEMPLES = 3 if MODE_DEMO else 10
 echantillon = df.sample(n=N_EXEMPLES, random_state=42)
 
 for _, ligne in echantillon.iterrows():
     prediction = chat(MODELES_SLM[-1], prompt_zero_shot(ligne), max_new_tokens=20)
-    print(f"Vrai : {ligne['label']:12s} | Prédit (zero-shot) : {prediction}")
+    print(f"Vrai: {ligne['label']:12s} | Prédit (zero-shot): {prediction}")
 '''))
 
 cells.append(md("""\
-## 6. Few-shot : donner 2 exemples avant de demander
+## 6. Few-shot: donner 2 exemples avant de demander
 
-Le **prompt engineering** le plus efficace pour guider un petit modèle : montrer quelques
+Le **prompt engineering** le plus efficace pour guider un petit modèle: montrer quelques
 exemples résolus (« few-shot ») avant la vraie question. On réutilise le **même** échantillon
 pour comparer équitablement avec le zero-shot.
 """))
@@ -207,19 +207,19 @@ cells.append(code('''\
 exemples_fewshot = df.drop(echantillon.index).sample(n=2, random_state=7)
 
 def prompt_few_shot(ligne, exemples):
-    demo = "\\n".join(f"Mesures : {ligne_en_texte(e)} → {e['label']}"
+    demo = "\\n".join(f"Mesures: {ligne_en_texte(e)} → {e['label']}"
                       for _, e in exemples.iterrows())
-    return (f"Voici des exemples de mesures et la culture recommandée :\\n{demo}\\n\\n"
-            f"Nouvelle mesure : {ligne_en_texte(ligne)}\\n"
-            f"Culture recommandée (UNIQUEMENT parmi : {CULTURES_TXT}) :")
+    return (f"Voici des exemples de mesures et la culture recommandée:\\n{demo}\\n\\n"
+            f"Nouvelle mesure: {ligne_en_texte(ligne)}\\n"
+            f"Culture recommandée (UNIQUEMENT parmi: {CULTURES_TXT}):")
 
 for _, ligne in echantillon.iterrows():
     prediction = chat(MODELES_SLM[-1], prompt_few_shot(ligne, exemples_fewshot), max_new_tokens=20)
-    print(f"Vrai : {ligne['label']:12s} | Prédit (few-shot)   : {prediction}")
+    print(f"Vrai: {ligne['label']:12s} | Prédit (few-shot): {prediction}")
 '''))
 
 cells.append(md("""\
-> 💡 Comparez les deux sections : le **few-shot** aide souvent un petit modèle à mieux
+> 💡 Comparez les deux sections: le **few-shot** aide souvent un petit modèle à mieux
 > respecter le format de réponse attendu, et parfois à être plus précis.
 """))
 
@@ -233,12 +233,12 @@ cells.append(code('''\
 consigne = ("Tu es un ingénieur agronome francophone. "
             "Tu réponds de façon claire, pratique et concise, pour de petits agriculteurs.")
 
-question = "Mes feuilles de tomate ont des taches jaunes. Quelles peuvent être les causes ?"
+question = "Mes feuilles de tomate ont des taches jaunes. Quelles peuvent être les causes?"
 print(chat(MODELES_SLM[-1], question, systeme=consigne))
 '''))
 
 cells.append(md("""\
-## 8. Quand préférer un SLM ?
+## 8. Quand préférer un SLM?
 
 - ✅ **Au champ, hors-ligne**, sur téléphone ou mini-PC.
 - ✅ Pour des tâches **simples et cadrées** (FAQ, classification, extraction).
@@ -259,7 +259,7 @@ cells.append(md("""\
 
 Demandez au plus gros modèle (`MODELES_SLM[-1]`) d'**inventer un slogan** pour une
 coopérative agricole, avec `temperature=0.0`, `0.5`, puis `1.0`. Que remarquez-vous sur la
-créativité et la cohérence des réponses ?
+créativité et la cohérence des réponses?
 """))
 
 cells.append(code('''\
@@ -289,7 +289,7 @@ cells.append(md("""\
 ### 🏋️ Exercice 3 — 0-shot vs 1-shot vs few-shot
 
 Reprenez `prompt_few_shot(...)` avec **1 seul** exemple, puis avec **4 exemples**, pour une
-même ligne du jeu de données. Le nombre d'exemples change-t-il la réponse ?
+même ligne du jeu de données. Le nombre d'exemples change-t-il la réponse?
 """))
 
 cells.append(code('''\
@@ -298,7 +298,7 @@ ligne_test = df.drop(echantillon.index).sample(n=1, random_state=99).iloc[0]
 for k in [1, 4]:
     exemples_k = df.drop(echantillon.index).sample(n=k, random_state=7)
     prediction = chat(MODELES_SLM[-1], prompt_few_shot(ligne_test, exemples_k), max_new_tokens=20)
-    print(f"{k}-shot → {prediction}  (vrai : {ligne_test['label']})")
+    print(f"{k}-shot → {prediction}  (vrai: {ligne_test['label']})")
 '''))
 
 cells.append(md("""\
@@ -309,7 +309,7 @@ cells.append(md("""\
 - La **température** contrôle la créativité, `max_new_tokens` la longueur de la réponse.
 - Le **few-shot prompting** (montrer des exemples) guide un petit modèle sans le réentraîner.
 
-**➡️ Notebook suivant : `02_VLM_vision.ipynb`** — comprendre des images de plantes.
+**➡️ Notebook suivant: `02_VLM_vision.ipynb`** — comprendre des images de plantes.
 """))
 
 save(cells, "../notebooks/01_SLM_petits_modeles.ipynb")
