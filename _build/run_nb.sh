@@ -10,12 +10,15 @@ export TOKENIZERS_PARALLELISM=false
 
 NB="$1"
 TO="${2:-900}"
-WORK="/tmp/claude-1000/-home-hmb-Desktop/1f30d318-57c7-4b08-83bc-2954a63cd75a/scratchpad/nbwork"
-mkdir -p "$WORK"
+WORK="$(mktemp -d)"
+RESULTS="$(cd "$(dirname "$0")/.." && pwd)/.nbruns"
+mkdir -p "$RESULTS"
+trap 'cp -f "$WORK/$BASE" "$RESULTS/$BASE" 2>/dev/null; rm -rf "$WORK"' EXIT
 BASE="$(basename "$NB")"
 cp "$NB" "$WORK/$BASE"
 
 echo ">>> Exécution: $BASE (timeout ${TO}s/cellule)"
+echo ">>> Résultat (avec sorties) conservé dans : $RESULTS/$BASE"
 cd "$WORK"
 jupyter nbconvert --to notebook --execute --inplace \
   --ExecutePreprocessor.timeout="$TO" \
