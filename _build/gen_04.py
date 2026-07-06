@@ -3,199 +3,107 @@ from gen_common import md, code, save, CONFIG_CELL, KAGGLE_CELL, IMAGES_CELL
 cells = []
 
 cells.append(md("""\
-# 🌾 Atelier IA Agricole — 04. OV: détection ouverte, segmentation et tracking
+# 🌾 Atelier IA Agricole — 02. VLM: comprendre des images de plantes
 
-**OV** (*Open Vocabulary*) désigne des modèles de détection qui cherchent un objet à partir
-d'un **mot** plutôt que d'une liste figée de catégories. Ce notebook montre trois briques
-visuelles utiles au champ:
-- **bounding box**: repérer un objet avec un mot-clé (« a leaf », « fruit »…) ;
-- **segmentation**: isoler l'objet dans l'image ;
-- **tracking**: suivre cet objet sur une petite séquence d'images.
+Un **VLM** (*Vision-Language Model*) comprend à la fois les **images** et le **texte**.
+On peut lui montrer une **photo de feuille** et lui demander de la **décrire** ou de
+répondre à une **question** à son sujet.
 
-Le modèle utilisé (**OWL-ViT base**, ~150M paramètres) est volontairement **petit et rapide**,
-pour tourner confortablement sur le CPU gratuit de Google Colab. Le code reste minimal: le but
-est d'apprendre à **utiliser** le modèle et à observer l'effet du **prompt** (le mot-clé donné
-au détecteur), pas d'écrire beaucoup de code.
+Ce notebook n'est pas un cours de programmation: le code reste minimal. L'objectif est
+d'apprendre à **utiliser** un modèle de fondation vision-langage sur un vrai jeu de données,
+et d'observer l'effet de réglages comme la **longueur de réponse** et le **prompt engineering**
+(la façon de poser la question).
+
+On utilise **SmolVLM** (Hugging Face), un VLM **compact (~250 à 500 M de paramètres)**, assez
+léger pour tourner sur le CPU gratuit de Google Colab.
 """))
 
 cells.append(code(CONFIG_CELL))
 
 cells.append(code('''\
-pip_install("transformers>=4.56", "accelerate", "pillow", "opencv-contrib-python")
-import numpy as np
-import cv2
-from PIL import ImageDraw
-print("✅ opencv", cv2.__version__)
+pip_install("transformers>=4.56", "accelerate", "pillow")
+from transformers import pipeline
+print("✅ Bibliothèques prêtes.")
 '''))
 
 cells.append(code(KAGGLE_CELL))
 cells.append(code(IMAGES_CELL))
 
 cells.append(md("""\
-## 1. Charger des images agricoles (Kaggle)
+## 1. Charger le VLM
 
-On réutilise le jeu **Plant Disease Recognition** (Kaggle, `Healthy` / `Powdery` / `Rust`) déjà
-vu au notebook 02, et on garde la première photo pour la démonstration pas à pas.
+- En **mode démo**: `SmolVLM-256M-Instruct` (250M paramètres, rapide à tester).
+- En **mode complet**: `SmolVLM-500M-Instruct` (500M paramètres, plus précis).
+
+On désactive le **découpage en tuiles** de l'image (`do_image_splitting`): cela suffit pour
+décrire une photo simple, et ça reste **rapide** même sans GPU.
+"""))
+
+cells.append(code('''\
+MODELE_VLM = "HuggingFaceTB/SmolVLM-256M-Instruct" if MODE_DEMO else "HuggingFaceTB/SmolVLM-500M-Instruct"
+
+pipe = pipeline("image-text-to-text", model=MODELE_VLM, dtype="auto")
+pipe.image_processor.do_image_splitting = False
+
+n_params = pipe.model.num_parameters() / 1e6
+print(f"✅ {MODELE_VLM} chargé (~{n_params:.0f} M paramètres)")
+'''))
+
+cells.append(md("""\
+## 2. Décrire et interroger une image
+
+Une seule fonction suffit: on donne une **image** et une **question** (texte), le modèle
+répond. `max_new_tokens` limite la longueur de la réponse générée.
+"""))
+
+cells.append(code('''\
+def demander_image(image, question="Describe the image in one short sentence.", max_new_tokens=40):
+    messages = [{"role": "user", "content": [{"type": "image", "image": image},
+                                              {"type": "text", "text": question}]}]
+    sortie = pipe(text=messages, max_new_tokens=max_new_tokens)
+    return sortie[0]["generated_text"][-1]["content"].strip()
+'''))
+
+cells.append(md("""\
+## 3. Un vrai jeu de données agricole (Kaggle)
+
+On utilise le jeu **Plant Disease Recognition** (Kaggle): des photos de feuilles réparties
+en 3 catégories — `Healthy`, `Powdery`, `Rust`. On demande au VLM un **diagnostic rapide** sur
+plusieurs photos, et on compare à la vraie catégorie.
 """))
 
 cells.append(code('''\
 N_EXEMPLES = 3 if MODE_DEMO else 10
 echantillon = echantillon_images_plantes(N_EXEMPLES)
-image, vrai_label = echantillon[0]
-print(f"{len(echantillon)} images chargées. Photo de démonstration: {vrai_label}")
-image.thumbnail((480, 480))
-image
+print(f"{len(echantillon)} images chargées.")
+
+question_diagnostic = ("Look at this plant leaf. In one short sentence, say if it looks "
+                       "healthy or diseased, and why.")
+
+for image, vrai_label in echantillon:
+    reponse = demander_image(image, question_diagnostic)
+    print(f"Vrai: {vrai_label:10s} | VLM: {reponse}")
 '''))
 
 cells.append(md("""\
-## 2. Trouver un objet avec du texte (détection ouverte)
-
-On donne un mot, et le modèle cherche dans l'image l'objet correspondant — sans avoir été
-entraîné spécifiquement sur ce mot. On garde toujours la **meilleure** boîte trouvée, même si
-sa confiance est faible (utile sur une photo dense, où « leaf » désigne une zone plutôt qu'un
-objet unique): on affiche alors un avertissement plutôt que de planter.
+> 🌍 **Remarque langue.** Ces petits modèles VLM « pensent » surtout en **anglais**.
+> Astuce: posez la question en anglais, puis **traduisez la réponse** avec un SLM/LLM
+> (notebooks 01 et 05) !
 """))
-
-cells.append(code('''\
-from transformers import pipeline
-
-MODELE_DETECTION = "google/owlvit-base-patch32"
-detecteur = pipeline("zero-shot-object-detection", model=MODELE_DETECTION, dtype="auto")
-
-def detecter(image, texte_cible, seuil_alerte=0.05):
-    resultats = detecteur(image, candidate_labels=[texte_cible], threshold=0.0)
-    if not resultats:
-        print(f"⚠️ Aucune détection pour « {texte_cible} ».")
-        return None
-    meilleure = resultats[0]
-    if meilleure["score"] < seuil_alerte:
-        print(f"⚠️ Confiance faible ({meilleure['score']:.2f}) pour « {texte_cible} » "
-              "— résultat à vérifier.")
-    return meilleure
-
-prediction = detecter(image, "a leaf")
-print(prediction)
-'''))
-
-cells.append(code('''\
-def dessiner_box(image, detection, couleur="red"):
-    img = image.copy()
-    draw = ImageDraw.Draw(img)
-    box = detection["box"]
-    draw.rectangle([box["xmin"], box["ymin"], box["xmax"], box["ymax"]], outline=couleur, width=4)
-    draw.text((box["xmin"], max(0, box["ymin"] - 18)), f"{detection['label']} {detection['score']:.2f}", fill=couleur)
-    return img
-
-dessiner_box(image, prediction)
-'''))
-
-cells.append(md("""\
-## 3. Segmenter l'objet détecté
-
-La segmentation isole les pixels de l'objet. Pour rester simple, on prend la boîte détectée
-comme point de départ et on applique `grabCut` (OpenCV).
-"""))
-
-cells.append(code('''\
-def segmenter(image, detection):
-    arr = np.array(image)
-    mask = np.zeros(arr.shape[:2], np.uint8)
-    bgd = np.zeros((1, 65), np.float64)
-    fgd = np.zeros((1, 65), np.float64)
-    box = detection["box"]
-    h, w = arr.shape[:2]
-    # Rogner la boîte dans l'image en gardant une marge de fond: grabCut plante
-    # (cv2.error) si le rectangle couvre tout le cadre (aucun pixel de fond) — ce qui
-    # arrive avec une feuille qui remplit l'image. On garde donc >= 1 px de marge.
-    x0 = max(1, int(box["xmin"]))
-    y0 = max(1, int(box["ymin"]))
-    x1 = min(w - 1, int(box["xmax"]))
-    y1 = min(h - 1, int(box["ymax"]))
-    rect = (x0, y0, max(1, x1 - x0), max(1, y1 - y0))
-    try:
-        cv2.grabCut(arr, mask, rect, bgd, fgd, 5, cv2.GC_INIT_WITH_RECT)
-    except cv2.error:
-        print("⚠️ Segmentation impossible pour cette boîte — image d'origine renvoyée.")
-        return image
-    masque = np.where((mask == 2) | (mask == 0), 0, 1).astype("uint8")
-    retour = arr * masque[:, :, np.newaxis]
-    return Image.fromarray(retour)
-
-image_segmente = segmenter(image, prediction)
-image_segmente
-'''))
-
-cells.append(md("""\
-## 4. Suivre l'objet dans le temps (tracking)
-
-Le tracking consiste à suivre la boîte d'un objet d'une image à la suivante. Pour un notebook
-pédagogique, on fabrique une mini-séquence à partir de la même image et on lance un tracker
-OpenCV.
-"""))
-
-cells.append(code('''\
-def sequence_depuis_image(image, nb_images=5):
-    base = np.array(image)
-    frames = []
-    for i in range(nb_images):
-        canvas = np.full_like(base, 245)
-        decalage = 18 * i
-        h, w = base.shape[:2]
-        y0 = min(20 + decalage, max(0, h - 20))
-        x0 = min(20 + decalage, max(0, w - 20))
-        x1 = min(x0 + w - 80, w)
-        y1 = min(y0 + h - 80, h)
-        crop = base[:y1 - y0, :x1 - x0]
-        canvas[y0:y0 + crop.shape[0], x0:x0 + crop.shape[1]] = crop
-        frames.append(canvas)
-    return frames
-
-frames = sequence_depuis_image(image)
-box = prediction["box"]
-init_box = (
-    int(box["xmin"]),
-    int(box["ymin"]),
-    int(box["xmax"] - box["xmin"]),
-    int(box["ymax"] - box["ymin"]),
-)
-
-tracker = cv2.TrackerCSRT_create() if hasattr(cv2, "TrackerCSRT_create") else cv2.legacy.TrackerCSRT_create()
-# On initialise le tracker sur l'image d'origine (où `init_box` est exacte), puis on le
-# laisse suivre l'objet à mesure qu'il se déplace dans la séquence fabriquée.
-tracker.init(cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR), init_box)
-
-for i, frame in enumerate(frames, start=1):
-    ok, boite = tracker.update(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-    print(f"Image {i}: suivi {ok} | boîte = {tuple(round(v, 1) for v in boite)}")
-'''))
-
-cells.append(md("""\
-## 5. Détecter sur tout l'échantillon Kaggle
-
-On applique la détection « a leaf » à chacune des photos chargées à l'étape 1, et on observe
-la confiance obtenue selon la catégorie réelle de la photo.
-"""))
-
-cells.append(code('''\
-for img, label in echantillon:
-    resultat = detecter(img, "a leaf", seuil_alerte=1.0)  # seuil à 1.0: pas d'avertissement répété
-    score = resultat["score"] if resultat else 0.0
-    print(f"Vrai: {label:10s} | confiance détection 'a leaf' = {score:.2f}")
-'''))
 
 cells.append(md("""\
 ---
 # 🏋️ Exercices
 
-Ces exercices ne visent pas à *écrire du code*, mais à **observer l'effet** du prompt donné
-au détecteur.
+Ces exercices ne visent pas à *écrire du code*, mais à **observer l'effet** de quelques
+réglages sur un modèle vision-langage.
 """))
 
 cells.append(md("""\
-### 🏋️ Exercice 1 — Le prompt engineering change la confiance
+### 🏋️ Exercice 1 — Effet de `max_new_tokens`
 
-Comparez la confiance obtenue pour `"leaf"`, `"a leaf"` et `"a green plant leaf"` sur la même
-image. La formulation du mot-clé change-t-elle vraiment le résultat?
+Prenez la première image de `echantillon` et demandez une description avec
+`max_new_tokens=10`, puis `max_new_tokens=80`. Que se passe-t-il avec la réponse courte?
 """))
 
 cells.append(code('''\
@@ -207,17 +115,19 @@ cells.append(md("""\
 """))
 
 cells.append(code('''\
-for texte in ["leaf", "a leaf", "a green plant leaf"]:
-    resultat = detecter(image, texte, seuil_alerte=1.0)
-    score = resultat["score"] if resultat else 0.0
-    print(f"{texte:22s} → confiance = {score:.3f}")
+image_test, _ = echantillon[0]
+for taille in [10, 80]:
+    print(f"--- max_new_tokens = {taille} ---")
+    print(demander_image(image_test, "Describe this leaf in detail.", max_new_tokens=taille))
+    print()
 '''))
 
 cells.append(md("""\
-### 🏋️ Exercice 2 — Comparer plusieurs mots-clés
+### 🏋️ Exercice 2 — Prompt engineering: question vague vs question ciblée
 
-Comparez les scores de confiance obtenus pour `"a leaf"`, `"a plant"` et `"a fruit"` sur la
-même image.
+Sur la même image, comparez une question **vague** (« What do you see? ») à une question
+**ciblée** (« Does this leaf show signs of rust disease, powdery mildew, or is it healthy?
+Answer with one word. »). Laquelle donne une réponse plus utile pour un diagnostic?
 """))
 
 cells.append(code('''\
@@ -229,23 +139,26 @@ cells.append(md("""\
 """))
 
 cells.append(code('''\
-for mot in ["a leaf", "a plant", "a fruit"]:
-    resultat = detecter(image, mot, seuil_alerte=1.0)
-    score = resultat["score"] if resultat else 0.0
-    print(f"{mot:10s} → confiance = {score:.2f}")
+prompt_vague = "What do you see?"
+prompt_cible = ("Does this leaf show signs of rust disease, powdery mildew, or is it "
+                "healthy? Answer with one word.")
+
+print("=== Vague ===")
+print(demander_image(image_test, prompt_vague))
+print("\\n=== Ciblée ===")
+print(demander_image(image_test, prompt_cible))
 '''))
 
 cells.append(md("""\
 ## ✅ Récapitulatif
 
-- La **détection ouverte (OV)** permet de chercher un objet avec un mot, sans réentraînement.
-- La **formulation du mot-clé** (prompt engineering) change nettement la confiance obtenue.
-- La **segmentation** transforme une boîte en masque de pixels, le **tracking** suit l'objet
-  d'image en image.
-- Un modèle **petit (~150M paramètres)** suffit pour ce trio, et reste rapide sur Colab.
+- Un **VLM** relie **image** et **texte**: description ou question/réponse visuelle.
+- `max_new_tokens` contrôle la longueur ; une question **ciblée** (prompt engineering) donne
+  une réponse plus exploitable qu'une question vague.
+- Très utile pour le **pré-diagnostic** à partir d'une photo — à confirmer toujours par un
+  expert.
 
-**➡️ Notebook suivant: `05_LLM_quantization.ipynb`** — faire tourner un grand modèle de
-langage (~9 Md paramètres) grâce à la quantification, en local ou via une API cloud (Groq).
+**➡️ Notebook suivant: `03_TinyLLM_TinyVLM.ipynb`** — les modèles génératifs les plus petits.
 """))
 
-save(cells, "../notebooks/04_OV_detection_ouverte.ipynb")
+save(cells, "../notebooks/04_VLM_vision.ipynb")

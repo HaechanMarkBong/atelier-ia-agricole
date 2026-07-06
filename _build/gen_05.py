@@ -1,275 +1,294 @@
-from gen_common import md, code, save, CONFIG_CELL, KAGGLE_CELL
+"""05_OV_video_tracking.ipynb — Prompt -> boîte, segmentation et suivi dans une VIDÉO.
+
+Modèles (100 % Hugging Face, aucun service payant, aucune boîte dessinée à la main):
+  - Grounding DINO (détection ouverte): un TEXTE -> des boîtes englobantes.
+  - SAM 2 vidéo (Segment Anything 2): les boîtes -> masques de segmentation
+    PROPAGÉS et SUIVIS (tracking) d'une image à l'autre de la vidéo, avec un
+    identifiant stable par cible.
+Ensemble = « Grounded SAM 2 »: on écrit un mot, le modèle repère, découpe et suit
+la cible dans toute la vidéo — automatiquement.
+"""
+from gen_common import md, code, save, CONFIG_CELL
 
 cells = []
 
 cells.append(md("""\
-# 🌾 Atelier IA Agricole — 05. LLM: faire tenir un grand modèle dans Google Colab
+# 🌾 Atelier IA Agricole — 05. Prompt → boîte, segmentation & suivi dans une VIDÉO
 
-Un **LLM** (*Large Language Model*) est un modèle de langage **massif** (ici, un modèle
-d'environ **9 milliards de paramètres**): bien plus savant qu'un SLM (notebook 01), mais
-aussi bien plus **lourd**.
+Les notebooks précédents travaillaient sur du **texte** ou une **image fixe**. Ici on passe à la
+**vidéo**: on écrit un **mot** (le *prompt*) et deux modèles font le reste, **tout seuls** —
+on ne dessine aucune boîte à la main.
 
-**Le problème:** stocker 9 milliards de paramètres en pleine précision (fp32) demande
-**~35 Go de mémoire** — impossible sur le GPU gratuit de Google Colab (T4, 16 Go de VRAM).
+1. **Détection ouverte** — un texte (« cow », « a cow »…) → des **boîtes englobantes**
+   (*bounding boxes*). Modèle: **Grounding DINO** (`IDEA-Research/grounding-dino-tiny`).
+2. **Segmentation + suivi** — chaque boîte → un **masque** de pixels, **propagé et suivi**
+   (*tracking*) sur toutes les images, avec un **identifiant stable** par cible.
+   Modèle: **SAM 2** vidéo (`facebook/sam2.1-hiera-tiny`).
 
-Deux solutions, présentées dans ce notebook:
-1. **La quantification** — réduire la précision numérique des paramètres (fp32 → int4) pour
-   faire tenir le LLM **localement** sur le GPU Colab.
-2. **Le cloud (Groq)** — envoyer la question à un LLM **hébergé**, sans aucun calcul local.
+Cette combinaison s'appelle **« Grounded SAM 2 »**. Tout est produit **automatiquement** par les
+modèles à partir du **prompt**: le seul geste humain est d'écrire le mot recherché.
+
+> 🐄 **Cas agricole**: repérer, isoler et **suivre le bétail** dans une vidéo de pâturage
+> (comptage de troupeau, surveillance, analyse de comportement). On utilise une courte vidéo
+> libre de droits (Pexels) montrant des vaches qui broutent.
 """))
 
 cells.append(code(CONFIG_CELL))
 
 cells.append(code('''\
-pip_install("transformers>=4.56", "accelerate", "bitsandbytes")
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, pipeline
-print("✅ Bibliothèques prêtes. GPU disponible:", torch.cuda.is_available())
+# SAM 2 vidéo est arrivé dans transformers >= 4.57 -> on force la mise à niveau si besoin.
+pip_install("transformers>=4.57", "accelerate", "opencv-contrib-python", "pillow")
+# SAM 2 s'appuie sur torchvision (déjà présent sur Colab). On ne l'installe que s'il manque,
+# pour ne pas risquer de changer la version de torch.
+try:
+    import torchvision  # noqa: F401
+except Exception:
+    pip_install("torchvision")
+
+import numpy as np, cv2, torch
+from PIL import Image, ImageDraw
+print("✅ torch", torch.__version__, "| opencv", cv2.__version__)
+
+# GPU si disponible (Colab T4), sinon CPU. Les modèles choisis sont petits -> OK sur CPU.
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+print("Appareil de calcul:", DEVICE)
 '''))
 
 cells.append(md("""\
-## 1. Combien de mémoire prend un LLM de ~9 Md paramètres?
+## 1. Récupérer une courte vidéo de pâturage
 
-Chaque paramètre est normalement stocké sur 4 octets (fp32). La quantification réduit ce coût:
+On télécharge une vidéo **libre de droits** (Pexels). Si le réseau est indisponible, une petite
+vidéo de secours (une forme qui se déplace) est fabriquée pour que le notebook aille **jusqu'au
+bout** partout.
 """))
 
 cells.append(code('''\
-N_PARAMS_LLM = 8_829_407_232  # 01-ai/Yi-1.5-9B-Chat (~8,8 Md paramètres)
-VRAM_COLAB_GRATUIT_GO = 16    # GPU T4, offert gratuitement par Colab
+import urllib.request
 
-print(f"{'Précision':<14}{'Taille':>10}{'Tient sur Colab?':>22}")
-for nom, octets_par_param in [("fp32", 4), ("fp16 / bf16", 2), ("int8", 1), ("int4 (NF4)", 0.5)]:
-    go = N_PARAMS_LLM * octets_par_param / 1e9
-    tient = "✅ oui" if go < VRAM_COLAB_GRATUIT_GO else "❌ non"
-    print(f"{nom:<14}{go:>8.1f} Go{tient:>22}")
+URL_VIDEO = "https://www.pexels.com/download/video/8187697/"  # vaches au pâturage (Pexels)
+CHEMIN_VIDEO = "vaches.mp4"
+
+def telecharger_video(url, chemin):
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=60) as r, open(chemin, "wb") as f:
+            f.write(r.read())
+        print(f"✅ Vidéo téléchargée: {chemin}")
+        return True
+    except Exception as e:
+        print(f"⚠️ Téléchargement impossible ({e}) → vidéo de secours synthétique.")
+        return False
+
+def video_de_secours(chemin, n=40, taille=(640, 360)):
+    """Fabrique une vidéo simple (disque rouge qui traverse un pré vert) si Pexels est injoignable."""
+    out = cv2.VideoWriter(chemin, cv2.VideoWriter_fourcc(*"mp4v"), 25, taille)
+    w, h = taille
+    for i in range(n):
+        img = np.full((h, w, 3), (60, 140, 70), np.uint8)   # fond vert (BGR)
+        x = int(40 + (w - 80) * i / n)
+        cv2.circle(img, (x, h // 2), 40, (40, 40, 200), -1)  # disque rouge
+        out.write(img)
+    out.release()
+
+if not telecharger_video(URL_VIDEO, CHEMIN_VIDEO):
+    video_de_secours(CHEMIN_VIDEO)
 '''))
 
 cells.append(md("""\
-**Conclusion:** sans quantification (fp32/fp16), ce LLM ne tient **pas** sur un GPU Colab
-gratuit. En **int8** ou **int4**, il tient très confortablement. On utilise la bibliothèque
-**bitsandbytes** (gratuite, intégrée à Hugging Face) pour quantifier le modèle **au chargement**.
-"""))
+## 2. Échantillonner quelques images de la vidéo
 
-cells.append(md("""\
-## 2. Charger le LLM en 4 bits
-
-- En **mode démo**: un petit modèle (`Qwen2.5-0.5B-Instruct`) pour tester rapidement le code.
-- En **mode complet, avec un GPU**: le vrai LLM `01-ai/Yi-1.5-9B-Chat` (~8,8 Md paramètres),
-  quantifié en **4 bits (NF4)** grâce à `BitsAndBytesConfig`.
-
-> ⚠️ Le LLM de ~9 Md **a besoin d'un GPU**: la quantification `bitsandbytes` utilise des noyaux
-> CUDA, et le modèle non quantifié (~18 Go) ne tiendrait pas dans la RAM CPU de Colab (~13 Go).
-> **Sans GPU activé**, ce notebook bascule donc automatiquement sur le petit modèle pour rester
-> exécutable. Pour le vrai LLM: `Exécution` → `Modifier le type d'exécution` → **GPU (T4)**.
-
-`device_map="auto"` place automatiquement le modèle sur le GPU s'il est disponible, sinon sur
-le CPU.
+Une vidéo 4K de 20 s, c'est ~500 images: beaucoup trop pour un CPU. On garde **quelques images
+réparties** dans le temps et on les **réduit** (largeur fixe). En mode démo (sans GPU), on en
+prend encore moins pour rester rapide.
 """))
 
 cells.append(code('''\
-GPU_DISPO = torch.cuda.is_available()
+N_IMAGES = 8 if MODE_DEMO else 24      # nombre d'images échantillonnées dans la vidéo
+LARGEUR = 480 if MODE_DEMO else 640    # largeur cible (les images sont redimensionnées)
 
-# bitsandbytes quantifie les poids avec des noyaux CUDA: un GPU est donc indispensable pour
-# quantifier. De plus, un LLM de ~9 Md en précision normale (~18 Go) ne tient PAS dans la RAM
-# CPU d'un Colab gratuit (~13 Go): le charger sans GPU planterait la session (OOM). Donc,
-# sans GPU, on bascule sur un petit modèle pour que le notebook reste exécutable partout.
-# 👉 Sur Colab: Exécution → Modifier le type d'exécution → GPU (T4) pour le vrai LLM 9 Md quantifié.
-MODELE_LLM = ("Qwen/Qwen2.5-0.5B-Instruct"
-              if (MODE_DEMO or not GPU_DISPO) else "01-ai/Yi-1.5-9B-Chat")
+def echantillonner_video(chemin, n, largeur):
+    cap = cv2.VideoCapture(chemin)
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
+    indices = np.linspace(0, max(0, total - 1), n).astype(int)
+    images = []
+    for i in indices:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(i))
+        ok, f = cap.read()
+        if not ok:
+            continue
+        f = cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
+        h, w = f.shape[:2]
+        images.append(cv2.resize(f, (largeur, int(round(h * largeur / w)))))
+    cap.release()
+    return np.stack(images)
 
-config_4bit = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.float16,
+frames = echantillonner_video(CHEMIN_VIDEO, N_IMAGES, LARGEUR)
+print(f"{len(frames)} images de {frames.shape[2]}×{frames.shape[1]} px prêtes.")
+Image.fromarray(frames[0])   # aperçu de la 1re image
+'''))
+
+cells.append(md("""\
+## 3. Le prompt → des boîtes (détection ouverte)
+
+On donne un **mot** au détecteur **Grounding DINO**. Il renvoie les **boîtes** des objets
+correspondants sur la **première image**, sans avoir été entraîné sur ce mot précis. Convention
+du modèle: un prompt en minuscules terminé par un point (`"cow."`); on peut chaîner plusieurs
+cibles (`"cow. sheep."`). On se contente ici de **lire** les boîtes trouvées (coordonnées +
+confiance): l'affichage visuel viendra plus loin, une fois le suivi calculé.
+"""))
+
+cells.append(code('''\
+from transformers import AutoProcessor, GroundingDinoForObjectDetection
+
+ID_DETECTEUR = "IDEA-Research/grounding-dino-tiny"
+proc_dino = AutoProcessor.from_pretrained(ID_DETECTEUR)
+modele_dino = GroundingDinoForObjectDetection.from_pretrained(ID_DETECTEUR).to(DEVICE)
+
+def detecter(image_rgb, prompt, seuil=0.35, max_objets=4):
+    """image_rgb: np.uint8 HxWx3. Renvoie une liste de boîtes [x0,y0,x1,y1] (au plus max_objets)."""
+    image = Image.fromarray(image_rgb)
+    entrees = proc_dino(images=image, text=prompt, return_tensors="pt").to(DEVICE)
+    with torch.no_grad():
+        sorties = modele_dino(**entrees)
+    res = proc_dino.post_process_grounded_object_detection(
+        sorties, entrees.input_ids, threshold=seuil, text_threshold=0.3,
+        target_sizes=[image.size[::-1]],
+    )[0]
+    boites = [[float(v) for v in b] for b in res["boxes"][:max_objets]]
+    scores = [round(float(s), 2) for s in res["scores"][:max_objets]]
+    print(f"Prompt « {prompt} » → {len(boites)} boîte(s) ; confiance {scores}")
+    return boites
+
+PROMPT = "cow."
+boites = detecter(frames[0], PROMPT)
+
+if not boites:
+    # Filet de sécurité (ex.: vidéo de secours) : on sème une boîte centrale pour que la
+    # démonstration de suivi fonctionne quand même. Le vrai cas d'usage reste le prompt ci-dessus.
+    h, w = frames[0].shape[:2]
+    boites = [[w * 0.35, h * 0.35, w * 0.65, h * 0.65]]
+    print("⚠️ Aucune détection → boîte centrale de secours pour illustrer le suivi.")
+'''))
+
+cells.append(md("""\
+## 4. Segmenter **et suivre** chaque cible dans la vidéo (SAM 2)
+
+On donne les boîtes de la 1re image à **SAM 2 vidéo** (une boîte = une cible, avec un identifiant
+`#1`, `#2`…). Il en déduit un **masque** par cible, puis le **propage** sur toutes les images en
+gardant le **même identifiant**: c'est le **suivi** (tracking). Une seule intervention (les boîtes
+sur l'image 0), et le modèle fait le reste sur toute la séquence.
+"""))
+
+cells.append(code('''\
+from transformers import Sam2VideoModel, Sam2VideoProcessor
+
+ID_SAM = "facebook/sam2.1-hiera-tiny"
+proc_sam = Sam2VideoProcessor.from_pretrained(ID_SAM)
+modele_sam = Sam2VideoModel.from_pretrained(ID_SAM).to(DEVICE).eval()
+
+# 1) ouvrir une "session vidéo" contenant toutes les images
+session = proc_sam.init_video_session(video=frames, inference_device=DEVICE, dtype=torch.float32)
+
+# 2) déclarer les cibles sur l'image 0 : une boîte = un objet (identifiants 1..N)
+ids_objets = list(range(1, len(boites) + 1))
+proc_sam.add_inputs_to_inference_session(
+    inference_session=session, frame_idx=0, obj_ids=list(ids_objets),  # copie: SAM 2 vide la liste au fil du suivi
+    input_boxes=[boites],   # format [batch][objet][x0,y0,x1,y1]
 )
 
-def charger_llm(config_quant=None):
-    """Charge MODELE_LLM en appliquant la quantification bitsandbytes si un GPU est disponible,
-    sinon effectue un chargement normal (CPU) pour rester exécutable partout."""
-    if config_quant is not None and GPU_DISPO:
-        return AutoModelForCausalLM.from_pretrained(MODELE_LLM, quantization_config=config_quant,
-                                                    device_map="auto")
-    return AutoModelForCausalLM.from_pretrained(MODELE_LLM, dtype="auto", device_map="auto")
-
-tokenizer = AutoTokenizer.from_pretrained(MODELE_LLM)
-modele = charger_llm(config_4bit)
-pipe_llm = pipeline("text-generation", model=modele, tokenizer=tokenizer)
-
-empreinte_go = modele.get_memory_footprint() / 1e9
-if GPU_DISPO:
-    print(f"✅ {MODELE_LLM} chargé en 4 bits — empreinte mémoire réelle: {empreinte_go:.2f} Go")
-else:
-    print(f"ℹ️ Pas de GPU CUDA: petit modèle {MODELE_LLM} chargé en précision normale (CPU).")
-    print(f"   Empreinte mémoire réelle: {empreinte_go:.2f} Go")
-    print("   👉 Activez un GPU T4 sur Colab pour charger le vrai LLM 9 Md quantifié en 4 bits.")
+# 3) propager : SAM 2 segmente et suit chaque cible, image par image
+masques_par_image = {}
+with torch.no_grad():
+    for sortie in modele_sam.propagate_in_video_iterator(session, start_frame_idx=0):
+        masks = proc_sam.post_process_masks([sortie.pred_masks], [frames.shape[1:3]], binarize=True)[0]
+        masques_par_image[sortie.frame_idx] = (sortie.object_ids, masks)
+print(f"✅ {len(ids_objets)} cible(s) suivie(s) sur {len(masques_par_image)} images.")
 '''))
 
 cells.append(md("""\
-## 3. Interroger le LLM quantifié
+## 5. Visualiser le résultat: masques + boîtes + identifiants qui **suivent**
 
-Même si les poids sont compressés, on utilise le modèle **normalement**: la quantification
-est invisible pour l'utilisateur, seule la mémoire (et un peu la vitesse) change.
-`temperature` et `max_new_tokens` fonctionnent comme dans les notebooks précédents.
+Tout ce qui s'affiche ci-dessous est **produit par les modèles**, pas dessiné à la main:
+pour chaque image on superpose le **masque** (couleur = identifiant de la cible), on trace la
+**boîte englobante déduite du masque** (elle aussi automatique, et qui suit la cible), et on écrit
+l'**identifiant**. On assemble le tout en un **GIF animé** pour voir le suivi.
 """))
 
 cells.append(code('''\
-def chat_llm(prompt, systeme=None, temperature=0.0, max_new_tokens=150):
-    messages = ([{"role": "system", "content": systeme}] if systeme else []) + \\
-               [{"role": "user", "content": prompt}]
-    options = {"max_new_tokens": max_new_tokens}
-    options.update({"do_sample": True, "temperature": temperature} if temperature > 0
-                    else {"do_sample": False, "temperature": 1.0, "top_p": 1.0, "top_k": 50})
-    sortie = pipe_llm(messages, **options)
-    return sortie[0]["generated_text"][-1]["content"].strip()
+# Couleur stable par identifiant : la même cible garde sa couleur d'un bout à l'autre = suivi.
+PALETTE = [(230,60,60),(60,140,230),(60,200,120),(240,180,40),(180,90,220),(240,120,60),(30,200,200)]
+def couleur(oid):
+    return PALETTE[(oid - 1) % len(PALETTE)]
 
-print(chat_llm("En 3 phrases, explique les avantages de l'agriculture de précision."))
+def masque_2d(m):
+    return m.squeeze().cpu().numpy().astype(bool)
+
+def annoter(image_rgb, ids, masks):
+    """Superpose masques colorés + boîte (déduite du masque) + identifiant. Renvoie une image PIL."""
+    base = image_rgb.astype(np.float32)
+    overlay = base.copy()
+    for oid, m in zip(ids, masks):
+        mm = masque_2d(m)
+        if mm.any():
+            overlay[mm] = 0.45 * base[mm] + 0.55 * np.array(couleur(oid), np.float32)  # teinte le masque
+    img = Image.fromarray(overlay.clip(0, 255).astype(np.uint8))
+    d = ImageDraw.Draw(img)
+    for oid, m in zip(ids, masks):
+        mm = masque_2d(m)
+        if not mm.any():
+            continue
+        ys, xs = np.where(mm)                                   # boîte englobante = extrêmes du masque
+        d.rectangle([int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())],
+                    outline=couleur(oid), width=2)
+        d.text((int(xs.min()) + 2, max(0, int(ys.min()) - 12)), f"#{oid}", fill=couleur(oid))
+    return img
+
+images_annotees = [annoter(frames[i], *masques_par_image[i]) for i in sorted(masques_par_image)]
+print(f"{len(images_annotees)} images annotées.")
+images_annotees[len(images_annotees) // 2]   # aperçu d'une image du milieu
 '''))
 
-cells.append(code(KAGGLE_CELL))
+cells.append(code('''\
+from IPython.display import Image as ImageAffichee
+
+def faire_gif(images, chemin="suivi.gif", ms=350):
+    images[0].save(chemin, save_all=True, append_images=images[1:], duration=ms, loop=0)
+    return chemin
+
+chemin_gif = faire_gif(images_annotees)
+print(f"GIF: {chemin_gif} — chaque cible garde sa couleur/identifiant = suivi réussi.")
+ImageAffichee(filename=chemin_gif)
+'''))
 
 cells.append(md("""\
-## 4. Le LLM sur un vrai jeu de données (Kaggle)
+## 6. Application: compter le bétail suivi
 
-On reprend le jeu **Crop Recommendation Dataset** (notebook 01), mais on demande cette fois
-une **recommandation justifiée en une phrase** — une tâche plus riche, à la portée d'un LLM
-de ~9 Md paramètres.
+Le suivi attribue un **identifiant unique** par animal. Compter les identifiants effectivement
+vus (masque non vide) donne une estimation du **nombre d'animaux** repérés à partir du seul mot
+« cow » — utile pour un comptage de troupeau.
 """))
 
 cells.append(code('''\
-import pandas as pd
-
-ECHANTILLON_SECOURS = [
-    {"N": 20, "P": 129, "K": 201, "temperature": 23.4, "humidity": 91.7, "ph": 5.59, "rainfall": 116.1, "label": "apple"},
-    {"N": 100, "P": 80, "K": 52, "temperature": 27.5, "humidity": 77.3, "ph": 6.05, "rainfall": 110.3, "label": "banana"},
-    {"N": 43, "P": 68, "K": 20, "temperature": 29.6, "humidity": 66.2, "ph": 7.5, "rainfall": 69.4, "label": "blackgram"},
-    {"N": 43, "P": 68, "K": 81, "temperature": 17.5, "humidity": 17.9, "ph": 6.76, "rainfall": 78.9, "label": "chickpea"},
-    {"N": 21, "P": 20, "K": 31, "temperature": 25.6, "humidity": 99.7, "ph": 5.86, "rainfall": 165.8, "label": "coconut"},
-    {"N": 107, "P": 31, "K": 31, "temperature": 23.2, "humidity": 53.0, "ph": 6.77, "rainfall": 153.1, "label": "coffee"},
-    {"N": 122, "P": 40, "K": 17, "temperature": 25.0, "humidity": 81.3, "ph": 6.85, "rainfall": 80.0, "label": "cotton"},
-    {"N": 22, "P": 133, "K": 201, "temperature": 23.8, "humidity": 80.1, "ph": 6.0, "rainfall": 67.3, "label": "grapes"},
-    {"N": 80, "P": 43, "K": 43, "temperature": 23.8, "humidity": 74.4, "ph": 6.01, "rainfall": 172.6, "label": "jute"},
-    {"N": 24, "P": 67, "K": 22, "temperature": 20.1, "humidity": 22.9, "ph": 5.62, "rainfall": 104.6, "label": "kidneybeans"},
-    {"N": 18, "P": 66, "K": 22, "temperature": 25.9, "humidity": 67.6, "ph": 6.35, "rainfall": 47.9, "label": "lentil"},
-    {"N": 76, "P": 48, "K": 18, "temperature": 19.3, "humidity": 69.6, "ph": 5.78, "rainfall": 83.2, "label": "maize"},
-    {"N": 18, "P": 26, "K": 31, "temperature": 32.6, "humidity": 47.7, "ph": 5.42, "rainfall": 91.1, "label": "mango"},
-    {"N": 25, "P": 51, "K": 18, "temperature": 27.8, "humidity": 54.8, "ph": 9.46, "rainfall": 50.3, "label": "mothbeans"},
-    {"N": 21, "P": 44, "K": 18, "temperature": 27.1, "humidity": 86.9, "ph": 7.13, "rainfall": 50.5, "label": "mungbean"},
-    {"N": 100, "P": 17, "K": 48, "temperature": 29.7, "humidity": 94.3, "ph": 6.37, "rainfall": 26.5, "label": "muskmelon"},
-    {"N": 12, "P": 20, "K": 10, "temperature": 24.5, "humidity": 93.1, "ph": 6.53, "rainfall": 109.5, "label": "orange"},
-    {"N": 54, "P": 67, "K": 52, "temperature": 35.7, "humidity": 93.3, "ph": 6.59, "rainfall": 141.3, "label": "papaya"},
-    {"N": 27, "P": 71, "K": 23, "temperature": 23.5, "humidity": 46.5, "ph": 7.11, "rainfall": 150.9, "label": "pigeonpeas"},
-    {"N": 21, "P": 21, "K": 38, "temperature": 22.6, "humidity": 89.3, "ph": 6.33, "rainfall": 104.9, "label": "pomegranate"},
-    {"N": 81, "P": 53, "K": 42, "temperature": 23.7, "humidity": 81.0, "ph": 5.18, "rainfall": 233.7, "label": "rice"},
-    {"N": 103, "P": 16, "K": 49, "temperature": 24.1, "humidity": 81.6, "ph": 6.92, "rainfall": 51.8, "label": "watermelon"},
-]
-
-dossier = telecharger_dataset_kaggle("atharvaingle/crop-recommendation-dataset")
-df = None
-if dossier:
-    try:
-        df = pd.read_csv(f"{dossier}/Crop_recommendation.csv")
-    except Exception as e:
-        print(f"⚠️ Lecture du CSV Kaggle impossible ({e}) → échantillon de secours.")
-if df is None:
-    df = pd.DataFrame(ECHANTILLON_SECOURS)
-
-def ligne_en_texte(ligne):
-    return (f"N={ligne['N']}, P={ligne['P']}, K={ligne['K']}, "
-            f"température={ligne['temperature']:.1f}°C, humidité={ligne['humidity']:.0f}%, "
-            f"pH={ligne['ph']:.1f}, pluie={ligne['rainfall']:.0f}mm")
-
-N_EXEMPLES = 3 if MODE_DEMO else 10
-echantillon = df.sample(n=N_EXEMPLES, random_state=42)
-
-for _, ligne in echantillon.iterrows():
-    prompt = (f"Mesures de sol: {ligne_en_texte(ligne)}. Quelle culture recommandes-tu, "
-              "et pourquoi (une phrase)? La vraie culture attendue est en anglais.")
-    reponse = chat_llm(prompt, max_new_tokens=60)
-    print(f"--- Vrai: {ligne['label']} ---\\n{reponse}\\n")
+ids_vus = {oid for ids, masks in masques_par_image.values()
+           for oid, m in zip(ids, masks) if masque_2d(m).any()}
+print(f"🐄 {len(ids_vus)} cible(s) distincte(s) suivie(s) à partir du prompt « {PROMPT} » : "
+      f"{sorted(ids_vus)}")
 '''))
-
-cells.append(md("""\
-## 5. Utiliser un LLM cloud sans calcul local (Groq)
-
-**Groq** héberge de gros LLM (par exemple **Llama 3.3 70B**) et répond très vite via une API —
-utile quand même la quantification ne suffit pas (pas de GPU du tout, modèle encore plus gros).
-
-1. Créez un compte gratuit sur [console.groq.com](https://console.groq.com).
-2. Récupérez une clé gratuite sur **[console.groq.com/keys](https://console.groq.com/keys)**
-   (`Create API Key`), puis collez-la ci-dessous.
-
-> 🔒 Ne partagez jamais votre clé publiquement (ne la commitez pas sur GitHub).
-"""))
-
-cells.append(code('''\
-GROQ_API_KEY = ""  # 👉 Collez votre clé ici (gratuite sur console.groq.com)
-MODELE_GROQ = "llama-3.3-70b-versatile"  # ~70 Md paramètres, hébergé par Groq
-
-if not GROQ_API_KEY:
-    print("ℹ️ Pas de clé Groq: cette section sera ignorée.")
-    print("   Créez une clé gratuite sur https://console.groq.com/keys et collez-la ci-dessus.")
-else:
-    pip_install("groq")
-    from groq import Groq
-    client_groq = Groq(api_key=GROQ_API_KEY)
-
-    def chat_groq(prompt, systeme=None, temperature=0.0):
-        messages = ([{"role": "system", "content": systeme}] if systeme else []) + \\
-                   [{"role": "user", "content": prompt}]
-        reponse = client_groq.chat.completions.create(
-            model=MODELE_GROQ, messages=messages, temperature=temperature,
-        )
-        return reponse.choices[0].message.content.strip()
-
-    print(chat_groq("En 3 phrases, explique les avantages de l'agriculture de précision."))
-'''))
-
-cells.append(md("""\
-Si une clé est fournie, on peut reprendre la **même tâche** que la section 4 (recommandation
-de culture), mais via Groq — sans aucun modèle chargé localement.
-"""))
-
-cells.append(code('''\
-if GROQ_API_KEY:
-    for _, ligne in echantillon.head(3).iterrows():
-        prompt = (f"Mesures de sol: {ligne_en_texte(ligne)}. Quelle culture recommandes-tu, "
-                  "et pourquoi (une phrase)?")
-        print(f"--- Vrai: {ligne['label']} ---\\n{chat_groq(prompt)}\\n")
-else:
-    print("ℹ️ Section ignorée (pas de clé Groq).")
-'''))
-
-cells.append(md("""\
-## 6. int8 vs int4: quel compromis choisir?
-
-| Précision | Mémoire (~9 Md params) | Qualité | Quand l'utiliser |
-|-----------|------------------------|---------|-------------------|
-| fp16      | ~17,7 Go               | Référence | GPU avec beaucoup de VRAM |
-| int8      | ~8,8 Go                | Très proche du fp16 | Bon compromis si la VRAM le permet |
-| int4 (NF4)| ~4,4 Go                | Légère perte, souvent imperceptible | GPU limité (Colab gratuit) |
-
-| Approche | Calcul local? | Limite principale |
-|----------|-----------------|--------------------|
-| Quantification (int4) | Oui (GPU Colab) | Taille max du modèle ≈ VRAM disponible |
-| API cloud (Groq) | Non | Nécessite une connexion + une clé API |
-
-> 💡 En pratique: quantifier en **int4** pour rester autonome sur Colab, ou utiliser **Groq**
-> pour des modèles encore plus gros, sans se soucier du matériel.
-"""))
 
 cells.append(md("""\
 ---
 # 🏋️ Exercices
 
-Ces exercices ne visent pas à *écrire du code*, mais à **observer l'effet** de la
-quantification et des réglages de génération.
+Ces exercices ne visent pas à *écrire du code*, mais à **observer l'effet du prompt** sur la
+détection, la segmentation et le suivi.
 """))
 
 cells.append(md("""\
-### 🏋️ Exercice 1 — Comparer avec une quantification 8 bits
+### 🏋️ Exercice 1 — Changer la cible avec le prompt
 
-Rechargez `MODELE_LLM` avec `BitsAndBytesConfig(load_in_8bit=True)` et comparez l'empreinte
-mémoire réelle (`get_memory_footprint()`) avec la version 4 bits.
+Relancez la détection sur `frames[0]` avec un autre mot (`"grass."`, `"animal."`, `"field."`).
+Combien de boîtes obtenez-vous, et avec quelle confiance? Le prompt suffit à changer de cible,
+sans réentraînement.
 """))
 
 cells.append(code('''\
@@ -281,53 +300,15 @@ cells.append(md("""\
 """))
 
 cells.append(code('''\
-import gc
-
-del modele, pipe_llm
-gc.collect()
-
-config_8bit = BitsAndBytesConfig(load_in_8bit=True)
-modele_8bit = charger_llm(config_8bit)
-print(f"4 bits: {empreinte_go:.2f} Go")
-print(f"8 bits: {modele_8bit.get_memory_footprint() / 1e9:.2f} Go")
-if not GPU_DISPO:
-    print("(Sans GPU, les deux valeurs sont identiques: la quantification n'a pas été appliquée.)")
-
-del modele_8bit
-gc.collect()
+for mot in ["cow.", "grass.", "animal.", "field."]:
+    _ = detecter(frames[0], mot)
 '''))
 
 cells.append(md("""\
-### 🏋️ Exercice 2 — Effet de la température sur le LLM
+### 🏋️ Exercice 2 — Le seuil de confiance filtre les cibles
 
-Redemandez `chat_llm(...)` d'inventer un slogan pour une coopérative agricole avec
-`temperature=0.0` puis `temperature=1.0`. Le grand modèle réagit-il différemment du
-SLM (notebook 01) au même réglage?
-"""))
-
-cells.append(code('''\
-# 👉 Votre code ici (rechargez pipe_llm si besoin, avec le modèle 4 bits par exemple)
-'''))
-
-cells.append(md("""\
-### ✅ Solution 2
-"""))
-
-cells.append(code('''\
-modele = charger_llm(config_4bit)
-pipe_llm = pipeline("text-generation", model=modele, tokenizer=tokenizer)
-
-for t in [0.0, 1.0]:
-    print(f"--- température = {t} ---")
-    print(chat_llm("Invente un slogan court pour une coopérative agricole.", temperature=t))
-    print()
-'''))
-
-cells.append(md("""\
-### 🏋️ Exercice 3 — Pourquoi le fp16 ne tient pas sur Colab
-
-Sans charger le modèle, calculez la taille en Go d'un modèle de **13 milliards** de
-paramètres en fp16, et comparez-la aux 16 Go de VRAM d'un GPU T4.
+Rappelez `detecter(frames[0], "cow.", seuil=...)` avec un seuil bas (`0.3`) puis élevé (`0.7`).
+Un seuil élevé garde-t-il moins de boîtes? Comment cela changerait-il le nombre d'animaux suivis?
 """))
 
 cells.append(code('''\
@@ -335,28 +316,31 @@ cells.append(code('''\
 '''))
 
 cells.append(md("""\
-### ✅ Solution 3
+### ✅ Solution 2
 """))
 
 cells.append(code('''\
-n_params_13b = 13_000_000_000
-go_fp16 = n_params_13b * 2 / 1e9
-print(f"13 Md paramètres en fp16 → {go_fp16:.1f} Go (> 16 Go: ne tient pas sur un T4 gratuit)")
+# max_objets élevé pour que le plafond de 4 ne masque pas l'effet du seuil.
+for s in [0.3, 0.5, 0.7]:
+    b = detecter(frames[0], "cow.", seuil=s, max_objets=10)
+    print(f"  seuil={s} → {len(b)} boîte(s)")
 '''))
 
 cells.append(md("""\
-## ✅ Récapitulatif de l'atelier
+## ✅ Récapitulatif
 
-| # | Notebook | Famille | Taille | Ce que vous avez appris |
-|---|----------|---------|--------|--------------------------|
-| 01 | SLM | ~1 Md | conseils textuels, few-shot, comparaison taille/vitesse |
-| 02 | VLM | ~1 Md | décrire une image de plante, prompt engineering visuel |
-| 03 | TinyLLM / TinyVLM | ≤ 0,3 Md | les modèles génératifs les plus petits |
-| 04 | OV | ~150 M | détection ouverte, segmentation, tracking |
-| 05 | LLM | ~9 Md | **quantification** et **API cloud (Groq)** pour un gros modèle sur Colab |
+- **Grounding DINO** transforme un **mot** en **boîtes** (détection *ouverte*: pas de liste figée
+  de catégories).
+- **SAM 2 vidéo** transforme ces boîtes en **masques** et les **suit** image par image, avec un
+  **identifiant stable** par cible (segmentation + tracking).
+- Tout est **automatique** à partir du **prompt**: on ne dessine aucune boîte à la main; les seules
+  boîtes affichées sont **déduites des masques** produits par le modèle.
+- Des modèles **petits** (`grounding-dino-tiny`, `sam2.1-hiera-tiny`) suffisent et tournent même
+  sur le CPU gratuit de Colab; un GPU T4 accélère et permet plus d'images / de plus gros modèles
+  (`sam2.1-hiera-large`).
 
-**Bravo ! 🌾** Vous savez maintenant choisir — et faire tourner — le bon modèle d'IA selon
-la tâche et les ressources disponibles sur le terrain.
+**🎉 Fin de l'atelier.** Vous avez parcouru: **SLM** (01), **quantification LLM** (02),
+**TinyLLM/TinyVLM** (03), **VLM** (04) et enfin la **vision ouverte sur vidéo** (05).
 """))
 
-save(cells, "../notebooks/05_LLM_quantization.ipynb")
+save(cells, "../notebooks/05_OV_video_tracking.ipynb")

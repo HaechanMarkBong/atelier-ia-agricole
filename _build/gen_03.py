@@ -154,20 +154,178 @@ def demander_image_tiny(image, question, max_new_tokens=40):
 '''))
 
 cells.append(md("""\
-## 4. TinyVLM sur le jeu de données Kaggle (plant disease)
+## 4. Fine-tuning: spécialiser le TinyLLM sur nos cultures
 
-Même tâche que le notebook 02 (diagnostic Healthy / Powdery / Rust), avec le TinyVLM.
+En section 2, le TinyLLM « brut » se trompe presque toujours: il n'a jamais appris le lien
+entre mesures de sol et culture. Le **fine-tuning** ré-entraîne le modèle sur NOS exemples
+pour l'adapter à la tâche.
+
+135 M de paramètres, ça reste petit: pour une démonstration **nette et rapide**, on cible
+**quelques cultures bien distinctes** (avec les 22 d'un coup, il lui faudrait beaucoup plus de
+données et de calcul). On utilise **LoRA** — au lieu de ré-entraîner les 135 M de paramètres,
+on n'ajoute que quelques petites matrices: rapide, léger, parfait pour un GPU Colab gratuit.
+
+**Plan:** mesurer la précision AVANT, entraîner quelques minutes, puis re-mesurer sur le
+**même** jeu de test. On veut voir la précision **grimper**.
 """))
 
 cells.append(code('''\
-echantillon_images = echantillon_images_plantes(N_EXEMPLES)
-question_diagnostic = ("Look at this plant leaf. In one short sentence, say if it looks "
-                       "healthy or diseased, and why.")
+# Le fine-tuning entraîne les poids: on repart du modèle « brut » (pas d'un pipeline).
+# On libère d'abord les modèles des sections précédentes pour la RAM.
+for _v in ("pipe_tinyvlm", "pipe_tinyllm"):
+    if _v in globals():
+        del globals()[_v]
+gc.collect()
 
-for image, vrai_label in echantillon_images:
-    reponse = demander_image_tiny(image, question_diagnostic)
-    print(f"Vrai: {vrai_label:10s} | TinyVLM: {reponse}")
+pip_install("peft")
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments
+from peft import LoraConfig, get_peft_model
+
+GPU_DISPO = torch.cuda.is_available()
+DEVICE = "cuda" if GPU_DISPO else "cpu"
+tokenizer = AutoTokenizer.from_pretrained(MODELE_TINYLLM)
+
+# Quelques cultures aux profils sol/climat bien différents (démonstration nette).
+CULTURES_FT = ["rice", "apple", "cotton", "grapes", "maize", "banana"]
+N_CULTURES = 4 if MODE_DEMO else 6
+CULTURES_FT = [c for c in CULTURES_FT if c in set(df["label"])][:N_CULTURES]
+
+# Prompt COMPACT (mesures -> culture). La réponse attendue est le nom de la culture.
+def prompt_ft(l):
+    return (f"Sol: N={l['N']}, P={l['P']}, K={l['K']}, temp={l['temperature']:.0f}C, "
+            f"humidite={l['humidity']:.0f}%, pH={l['ph']:.1f}, pluie={l['rainfall']:.0f}mm. Culture?")
+
+def messages_ft(l, avec_reponse=True):
+    msgs = [{"role": "user", "content": prompt_ft(l)}]
+    if avec_reponse:
+        msgs.append({"role": "assistant", "content": str(l["label"])})
+    return msgs
+
+# Jeu ÉQUILIBRÉ: K_TEST exemples/culture pour le test, K_TRAIN pour l'entrainement.
+K_TEST = 4
+K_TRAIN = 30 if MODE_DEMO else 80
+tr, te = [], []
+for c in CULTURES_FT:
+    sub = df[df["label"] == c].sample(frac=1.0, random_state=0)
+    te.append(sub.iloc[:K_TEST])
+    tr.append(sub.iloc[K_TEST:K_TEST + K_TRAIN])
+df_test = pd.concat(te)
+df_train = pd.concat(tr).sample(frac=1.0, random_state=1)
+
+# Le fine-tuning a besoin du vrai jeu Kaggle. Sans lui (petit échantillon de secours), on saute.
+ASSEZ = len(df_train) >= 2 * len(CULTURES_FT) and len(df_test) >= len(CULTURES_FT)
+if ASSEZ:
+    print(f"Cultures ciblées: {CULTURES_FT}")
+    print(f"{len(df_train)} exemples d'entrainement, {len(df_test)} de test.")
+else:
+    print("⚠️ Pas assez de données (échantillon de secours Kaggle) pour le fine-tuning.")
+    print("   Relancez cette section avec le jeu Kaggle disponible.")
+
+@torch.no_grad()
+def predire(model, l, max_new_tokens=8):
+    enc = tokenizer.apply_chat_template(messages_ft(l, avec_reponse=False),
+                                        add_generation_prompt=True, return_tensors="pt",
+                                        return_dict=True).to(DEVICE)
+    out = model.generate(**enc, max_new_tokens=max_new_tokens, do_sample=False,
+                         pad_token_id=tokenizer.eos_token_id)
+    return tokenizer.decode(out[0, enc["input_ids"].shape[1]:], skip_special_tokens=True).strip().lower()
+
+def precision(model):
+    bons = sum(str(l["label"]).lower() in predire(model, l) for _, l in df_test.iterrows())
+    return bons / len(df_test)
 '''))
+
+cells.append(md("""\
+### Précision AVANT le fine-tuning
+
+Le modèle brut, sur ce prompt compact, répond surtout à côté.
+"""))
+
+cells.append(code('''\
+if ASSEZ:
+    modele = AutoModelForCausalLM.from_pretrained(MODELE_TINYLLM, dtype=torch.float32).to(DEVICE)
+    modele.eval()
+    prec_avant = precision(modele)
+    ex = df_test.iloc[0]
+    print(f"Exemple -> vrai: {ex['label']} | le modele brut repond: '{predire(modele, ex)}'")
+    print(f"🔎 Précision AVANT fine-tuning: {prec_avant:.0%}")
+'''))
+
+cells.append(md("""\
+### Entraînement LoRA (on n'apprend que la réponse)
+
+Astuce clé: on ne calcule la « perte » que sur le **nom de la culture** — la partie question
+est **masquée**. Ainsi le modèle apprend à *répondre*, pas à répéter la question. Sur GPU
+(Colab) l'entrainement prend quelques minutes; sur CPU c'est plus lent (mode démo réduit).
+"""))
+
+cells.append(code('''\
+if ASSEZ:
+    # Masquage du prompt: labels = -100 sur la question, vrai token sur la réponse.
+    def encoder(l):
+        full = tokenizer(tokenizer.apply_chat_template(messages_ft(l), tokenize=False),
+                         add_special_tokens=False)["input_ids"]
+        pre = tokenizer(tokenizer.apply_chat_template(messages_ft(l, avec_reponse=False),
+                        add_generation_prompt=True, tokenize=False),
+                        add_special_tokens=False)["input_ids"]
+        n = 0
+        while n < len(pre) and n < len(full) and full[n] == pre[n]:
+            n += 1
+        return {"input_ids": full, "attention_mask": [1] * len(full),
+                "labels": [-100] * n + full[n:]}
+
+    def collate(feats):
+        m = max(len(f["input_ids"]) for f in feats)
+        pad = tokenizer.pad_token_id
+        pack = lambda cle, rembourrage: torch.tensor(
+            [f[cle] + [rembourrage] * (m - len(f[cle])) for f in feats])
+        return {"input_ids": pack("input_ids", pad),
+                "attention_mask": pack("attention_mask", 0),
+                "labels": pack("labels", -100)}
+
+    exemples = [encoder(l) for _, l in df_train.iterrows()]
+    modele = get_peft_model(modele, LoraConfig(
+        r=16, lora_alpha=32, lora_dropout=0.05,
+        target_modules="all-linear", task_type="CAUSAL_LM"))
+    modele.print_trainable_parameters()
+
+    args = TrainingArguments(
+        output_dir="/tmp/ft_tinyllm",
+        per_device_train_batch_size=4,
+        num_train_epochs=4,
+        learning_rate=2e-4,
+        logging_steps=20,
+        save_strategy="no",
+        report_to="none",
+        disable_tqdm=True,
+    )
+    Trainer(model=modele, args=args, train_dataset=exemples, data_collator=collate).train()
+    print("✅ Entraînement terminé.")
+'''))
+
+cells.append(md("""\
+### Précision APRÈS le fine-tuning
+"""))
+
+cells.append(code('''\
+if ASSEZ:
+    modele.eval()
+    prec_apres = precision(modele)
+    print(f"AVANT: {prec_avant:.0%}   →   APRÈS: {prec_apres:.0%}")
+    print()
+    for _, l in df_test.iterrows():
+        marque = "✅" if str(l["label"]).lower() in predire(modele, l) else "  "
+        print(f"{marque} Vrai: {l['label']:10s} | Prédit: {predire(modele, l)}")
+'''))
+
+cells.append(md("""\
+> 💡 En quelques minutes de **fine-tuning LoRA**, un modèle minuscule (135 M) passe de
+> « incapable » à « plutôt bon » sur NOTRE tâche: la précision **grimpe nettement**. C'est ainsi
+> qu'on obtient de petits assistants « métier », spécialisés, embarquables et rapides.
+> (Pour les 22 cultures d'un coup, il faudrait bien plus de données et de calcul — le
+> fine-tuning réduit le besoin, il ne l'annule pas.)
+"""))
 
 cells.append(md("""\
 ---
@@ -239,6 +397,8 @@ cells.append(md("""\
 - Sur la **même tâche**, ils se trompent plus souvent: la taille a un vrai coût en qualité.
 - Les réglages (température, few-shot) ont un effet **encore plus marqué** sur un modèle
   minuscule que sur un modèle de taille moyenne.
+- Le **fine-tuning (LoRA)** spécialise un petit modèle sur une tâche précise et **améliore
+  nettement** ses prédictions, pour un coût de calcul modeste.
 
 **➡️ Notebook suivant: `04_OV_detection_ouverte.ipynb`** — détection ouverte, segmentation
 et tracking.
